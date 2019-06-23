@@ -70,6 +70,8 @@ _Py_IDENTIFIER(__new__);
 _Py_IDENTIFIER(__set_name__);
 _Py_IDENTIFIER(__setitem__);
 _Py_IDENTIFIER(builtins);
+_Py_IDENTIFIER(__setself__);
+_Py_IDENTIFIER(__getself__);
 
 static PyObject *
 slot_tp_new(PyTypeObject *type, PyObject *args, PyObject *kwds);
@@ -1527,6 +1529,7 @@ call_method(PyObject *obj, _Py_Identifier *name,
 {
     int unbound;
     PyObject *func, *retval;
+    retval = NULL;
 
     func = lookup_method(obj, name, &unbound);
     if (func == NULL) {
@@ -3615,6 +3618,8 @@ PyTypeObject PyType_Type = {
     type_new,                                   /* tp_new */
     PyObject_GC_Del,                            /* tp_free */
     (inquiry)type_is_gc,                        /* tp_is_gc */
+    0,                                          /* tp_setself */
+    0,                                          /* tp_getself */
 };
 
 
@@ -5728,6 +5733,22 @@ wrap_setattr(PyObject *self, PyObject *args, void *wrapped)
 }
 
 static PyObject *
+wrap_setself(PyObject *self, PyObject *args, void *wrapped)
+{
+    setselffunc func = (setselffunc)wrapped;
+    int res;
+    PyObject *value;
+
+    if (!PyArg_UnpackTuple(args, "", 1, 1, &value)) {
+        return NULL;
+    }
+    res = (*func)(self, value);
+    if (res < 0)
+        return NULL;
+    Py_RETURN_NONE;
+}
+
+static PyObject *
 wrap_delattr(PyObject *self, PyObject *args, void *wrapped)
 {
     setattrofunc func = (setattrofunc)wrapped;
@@ -6510,6 +6531,31 @@ slot_tp_setattro(PyObject *self, PyObject *name, PyObject *value)
     return 0;
 }
 
+static int
+slot_tp_setself(PyObject *self, PyObject *value)
+{
+    PyObject *stack[1];
+    PyObject *res;
+    _Py_IDENTIFIER(__setself__);
+
+    stack[0] = value;
+    res = call_method(self, &PyId___setself__, stack, 1);
+    if (res == NULL)
+        return -1;
+    Py_DECREF(res);
+    return 0;
+}
+
+static PyObject *
+slot_tp_getself(PyObject *self)
+{
+    PyObject *res;
+    _Py_IDENTIFIER(__getself__);
+
+    res = call_method(self, &PyId___getself__, NULL, 0);
+    return res;
+}
+
 static _Py_Identifier name_op[] = {
     {0, "__lt__", 0},
     {0, "__le__", 0},
@@ -6864,7 +6910,10 @@ static slotdef slotdefs[] = {
            "__new__(type, /, *args, **kwargs)\n--\n\n"
            "Create and return new object.  See help(type) for accurate signature."),
     TPSLOT("__del__", tp_finalize, slot_tp_finalize, (wrapperfunc)wrap_del, ""),
-
+    TPSLOT("__setself__", tp_setself, slot_tp_setself, wrap_setself,
+           "__setself($self, value)/)\n--\n\nImplement assignment"),
+    TPSLOT("__getself__", tp_getself, slot_tp_getself, wrap_binaryfunc,
+           "__getself($self, value)/)\n--\n\nImplement self get"),
     AMSLOT("__await__", am_await, slot_am_await, wrap_unaryfunc,
            "__await__($self, /)\n--\n\nReturn an iterator to be used in await expression."),
     AMSLOT("__aiter__", am_aiter, slot_am_aiter, wrap_unaryfunc,

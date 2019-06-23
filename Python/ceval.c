@@ -798,8 +798,15 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
    accessed by other code (e.g. a __del__ method or gc.collect()) and the
    variable would be pointing to already-freed memory. */
 #define SETLOCAL(i, value)      do { PyObject *tmp = GETLOCAL(i); \
-                                     GETLOCAL(i) = value; \
-                                     Py_XDECREF(tmp); } while (0)
+                                     if (tmp != NULL && Py_TYPE(tmp)->tp_setself != NULL && value != NULL) { \
+                                         if (tmp != value) { \
+                                             PyObject_SetSelf(tmp, value); \
+                                         } \
+                                     } else { \
+                                       fastlocals[i] = value; \
+                                       Py_XDECREF(tmp); \
+                                     } \
+                                     } while (0)
 
 
 #define UNWIND_BLOCK(b) \
@@ -1079,7 +1086,32 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
                                      PyTuple_GetItem(co->co_varnames, oparg));
                 goto error;
             }
-            Py_INCREF(value);
+
+           Py_INCREF(value);
+           PyTypeObject *tp = Py_TYPE(value);
+           if (value != NULL && Py_TYPE(value)->tp_getself != NULL) {
+               // Do not decloak an object, if it is being used in a method
+               // within itself. This will be indicated by the code objects
+               // pointing to the same memory.
+               int notselfmethod = 1;
+               PyObject * method_name = co->co_name;
+               if (PyObject_HasAttr(value, method_name)) {
+                    PyObject * method_lookup = PyObject_GetAttr(value, method_name);
+                    if (method_lookup != NULL) {
+                        PyObject * function_lookup = PyMethod_Function(method_lookup);
+                        PyCodeObject *code_lookup = (PyCodeObject *) PyFunction_GetCode(function_lookup);
+                        if (code_lookup == co) {
+                            notselfmethod = 0;
+                        }
+                    }
+               }
+               if (notselfmethod) {
+                   PyObject * tmp = value;
+                   value = PyObject_GetSelf(value);
+                   Py_DECREF(tmp);
+                   Py_INCREF(value);
+               }
+            }
             PUSH(value);
             FAST_DISPATCH();
         }
@@ -1932,7 +1964,7 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
                 goto error;
             }
             if (PyDict_CheckExact(ns))
-                err = PyDict_SetItem(ns, name, v);
+                err = PyDict_Namespace_SetItem(ns, name, v);
             else
                 err = PyObject_SetItem(ns, name, v);
             Py_DECREF(v);
@@ -2035,7 +2067,7 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
             PyObject *name = GETITEM(names, oparg);
             PyObject *v = POP();
             int err;
-            err = PyDict_SetItem(f->f_globals, name, v);
+            err = PyDict_Namespace_SetItem(f->f_globals, name, v);
             Py_DECREF(v);
             if (err != 0)
                 goto error;
@@ -2101,6 +2133,19 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
                     }
                 }
             }
+            if (Py_TYPE(v)->tp_getself != NULL) {
+                PyObject * tmp = v;
+                v = PyObject_GetSelf(v);
+                if (v == NULL) {
+                    if (PyErr_ExceptionMatches(PyExc_KeyError))
+                        format_exc_check_arg(
+                                    PyExc_NameError,
+                                    NAME_ERROR_MSG, name);
+                    goto error;
+                }
+                Py_DECREF(tmp);
+                Py_INCREF(v);
+            }
             PUSH(v);
             DISPATCH();
         }
@@ -2145,6 +2190,19 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
                         goto error;
                     }
                 }
+            }
+            if (Py_TYPE(v)->tp_getself != NULL) {
+                PyObject * tmp = v;
+                v = PyObject_GetSelf(v);
+                if (v == NULL) {
+                    if (PyErr_ExceptionMatches(PyExc_KeyError))
+                        format_exc_check_arg(
+                                    PyExc_NameError,
+                                    NAME_ERROR_MSG, name);
+                    goto error;
+                }
+                Py_DECREF(tmp);
+                Py_INCREF(v);
             }
             PUSH(v);
             DISPATCH();

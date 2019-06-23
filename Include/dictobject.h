@@ -80,6 +80,7 @@ PyAPI_FUNC(PyObject *) PyDict_SetDefault(
     PyObject *mp, PyObject *key, PyObject *defaultobj);
 #endif
 PyAPI_FUNC(int) PyDict_SetItem(PyObject *mp, PyObject *key, PyObject *item);
+PyAPI_FUNC(int) PyDict_Namespace_SetItem(PyObject *mp, PyObject *key, PyObject *item);
 #ifndef Py_LIMITED_API
 PyAPI_FUNC(int) _PyDict_SetItem_KnownHash(PyObject *mp, PyObject *key,
                                           PyObject *item, Py_hash_t hash);
@@ -170,6 +171,7 @@ PyAPI_FUNC(int) _PyDict_DelItemId(PyObject *mp, struct _Py_Identifier *key);
 PyAPI_FUNC(void) _PyDict_DebugMallocStats(FILE *out);
 
 int _PyObjectDict_SetItem(PyTypeObject *tp, PyObject **dictptr, PyObject *name, PyObject *value);
+int _PyObjectDict_Namespace_SetItem(PyTypeObject *tp, PyObject **dictptr, PyObject *name, PyObject *value);
 PyObject *_PyDict_LoadGlobal(PyDictObject *, PyDictObject *, PyObject *);
 #endif
 

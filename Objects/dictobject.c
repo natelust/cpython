@@ -1000,7 +1000,8 @@ Used both by the internal resize routine and by the public insert routine.
 Returns -1 if an error occurred, or 0 on success.
 */
 static int
-insertdict(PyDictObject *mp, PyObject *key, Py_hash_t hash, PyObject *value)
+_insertdict_impl(PyDictObject *mp, PyObject *key, Py_hash_t hash, PyObject *value,
+		 int isNS)
 {
     PyObject *old_value;
     PyDictKeyEntry *ep;
@@ -1015,6 +1016,21 @@ insertdict(PyDictObject *mp, PyObject *key, Py_hash_t hash, PyObject *value)
     Py_ssize_t ix = mp->ma_keys->dk_lookup(mp, key, hash, &old_value);
     if (ix == DKIX_ERROR)
         goto Fail;
+
+    if (old_value != NULL) {
+        PyTypeObject *tp = Py_TYPE(old_value);
+        if (tp->tp_setself != NULL && isNS) {
+            Py_DECREF(key);
+            if (old_value != value) {
+                return PyObject_SetSelf(old_value, value);
+            } else {
+                return 0; // don't pass self to self this seems to happen
+                          // in __repr__ something that should be looked
+                          // into
+            }
+        }
+    }
+
 
     assert(PyUnicode_CheckExact(key) || mp->ma_keys->dk_lookup == lookdict);
     MAINTAIN_TRACKING(mp, key, value);
@@ -1059,6 +1075,7 @@ insertdict(PyDictObject *mp, PyObject *key, Py_hash_t hash, PyObject *value)
         return 0;
     }
 
+
     if (_PyDict_HasSplitTable(mp)) {
         mp->ma_values[ix] = value;
         if (old_value == NULL) {
@@ -1083,6 +1100,12 @@ Fail:
     Py_DECREF(key);
     return -1;
 }
+
+static int
+insertdict(PyDictObject *mp, PyObject *key, Py_hash_t hash, PyObject *value){
+    return _insertdict_impl(mp, key, hash, value, 0);
+}
+
 
 /*
 Internal routine used by dictresize() to build a hashtable of entries.
@@ -1440,7 +1463,7 @@ _PyDict_LoadGlobal(PyDictObject *globals, PyDictObject *builtins, PyObject *key)
  * remove them.
  */
 int
-PyDict_SetItem(PyObject *op, PyObject *key, PyObject *value)
+_PyDict_SetItem_Impl(PyObject *op, PyObject *key, PyObject *value, int isNS)
 {
     PyDictObject *mp;
     Py_hash_t hash;
@@ -1460,8 +1483,20 @@ PyDict_SetItem(PyObject *op, PyObject *key, PyObject *value)
     }
 
     /* insertdict() handles any resizing that might be necessary */
-    return insertdict(mp, key, hash, value);
+    return _insertdict_impl(mp, key, hash, value, isNS);
 }
+
+int
+PyDict_SetItem(PyObject *op, PyObject *key, PyObject *value){
+    return _PyDict_SetItem_Impl(op, key, value, 0);
+}
+
+
+int
+PyDict_Namespace_SetItem(PyObject *op, PyObject *key, PyObject *value){
+    return _PyDict_SetItem_Impl(op, key, value, 1);
+}
+
 
 int
 _PyDict_SetItem_KnownHash(PyObject *op, PyObject *key, PyObject *value,
@@ -4301,8 +4336,8 @@ PyObject_GenericGetDict(PyObject *obj, void *context)
 }
 
 int
-_PyObjectDict_SetItem(PyTypeObject *tp, PyObject **dictptr,
-                      PyObject *key, PyObject *value)
+_PyObjectDict_SetItem_Impl(PyTypeObject *tp, PyObject **dictptr,
+                      PyObject *key, PyObject *value, int isNS)
 {
     PyObject *dict;
     int res;
@@ -4330,7 +4365,7 @@ _PyObjectDict_SetItem(PyTypeObject *tp, PyObject **dictptr,
         }
         else {
             int was_shared = (cached == ((PyDictObject *)dict)->ma_keys);
-            res = PyDict_SetItem(dict, key, value);
+            res = _PyDict_SetItem_Impl(dict, key, value, isNS);
             if (was_shared &&
                     (cached = CACHED_KEYS(tp)) != NULL &&
                     cached != ((PyDictObject *)dict)->ma_keys) {
@@ -4370,10 +4405,22 @@ _PyObjectDict_SetItem(PyTypeObject *tp, PyObject **dictptr,
         if (value == NULL) {
             res = PyDict_DelItem(dict, key);
         } else {
-            res = PyDict_SetItem(dict, key, value);
+            res = _PyDict_SetItem_Impl(dict, key, value, isNS);
         }
     }
     return res;
+}
+
+int
+_PyObjectDict_SetItem(PyTypeObject *tp, PyObject **dictptr,
+                      PyObject *key, PyObject *value) {
+    return _PyObjectDict_SetItem_Impl(tp, dictptr, key, value, 0);
+}
+
+int
+_PyObjectDict_Namespace_SetItem(PyTypeObject *tp, PyObject **dictptr,
+                      PyObject *key, PyObject *value) {
+    return _PyObjectDict_SetItem_Impl(tp, dictptr, key, value, 1);
 }
 
 void

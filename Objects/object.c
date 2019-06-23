@@ -802,6 +802,21 @@ PyObject_Hash(PyObject *v)
     return PyObject_HashNotImplemented(v);
 }
 
+int
+PyObject_SetSelf(PyObject *v, PyObject *value) {
+    PyTypeObject *tp = Py_TYPE(v);
+    if (tp->tp_setself != NULL)
+        return (*tp->tp_setself)(v, value);
+    return -1;
+}
+
+PyObject *
+PyObject_GetSelf(PyObject *self) {
+    PyTypeObject *tp = Py_TYPE(self);
+    PyObject *res = (*tp->tp_getself)(self);
+    return res;
+}
+
 PyObject *
 PyObject_GetAttrString(PyObject *v, const char *name)
 {
@@ -899,6 +914,7 @@ PyObject *
 PyObject_GetAttr(PyObject *v, PyObject *name)
 {
     PyTypeObject *tp = Py_TYPE(v);
+    PyObject *result = NULL;
 
     if (!PyUnicode_Check(name)) {
         PyErr_Format(PyExc_TypeError,
@@ -907,12 +923,20 @@ PyObject_GetAttr(PyObject *v, PyObject *name)
         return NULL;
     }
     if (tp->tp_getattro != NULL)
-        return (*tp->tp_getattro)(v, name);
+        result = (*tp->tp_getattro)(v, name);
+        if (result != NULL && Py_TYPE(result)->tp_getself != NULL){
+            result = PyObject_GetSelf(result);
+        }
+        return result;
     if (tp->tp_getattr != NULL) {
         const char *name_str = PyUnicode_AsUTF8(name);
         if (name_str == NULL)
             return NULL;
-        return (*tp->tp_getattr)(v, (char *)name_str);
+        result = (*tp->tp_getattr)(v, (char *)name_str);
+        if (result != NULL && Py_TYPE(result)->tp_getself != NULL){
+            result = PyObject_GetSelf(result);
+        }
+        return result;
     }
     PyErr_Format(PyExc_AttributeError,
                  "'%.50s' object has no attribute '%U'",
@@ -1354,14 +1378,14 @@ _PyObject_GenericSetAttrWithDict(PyObject *obj, PyObject *name,
             }
             goto done;
         }
-        res = _PyObjectDict_SetItem(tp, dictptr, name, value);
+        res = _PyObjectDict_Namespace_SetItem(tp, dictptr, name, value);
     }
     else {
         Py_INCREF(dict);
         if (value == NULL)
             res = PyDict_DelItem(dict, name);
         else
-            res = PyDict_SetItem(dict, name, value);
+            res = PyDict_Namespace_SetItem(dict, name, value);
         Py_DECREF(dict);
     }
     if (res < 0 && PyErr_ExceptionMatches(PyExc_KeyError))

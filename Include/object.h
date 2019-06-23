@@ -339,6 +339,8 @@ typedef int (*descrsetfunc) (PyObject *, PyObject *, PyObject *);
 typedef int (*initproc)(PyObject *, PyObject *, PyObject *);
 typedef PyObject *(*newfunc)(struct _typeobject *, PyObject *, PyObject *);
 typedef PyObject *(*allocfunc)(struct _typeobject *, Py_ssize_t);
+typedef int (*setselffunc)(PyObject *, PyObject *);
+typedef PyObject *(*getselffunc)(PyObject *);
 
 #ifdef Py_LIMITED_API
 typedef struct _typeobject PyTypeObject; /* opaque */
@@ -423,6 +425,8 @@ typedef struct _typeobject {
     unsigned int tp_version_tag;
 
     destructor tp_finalize;
+    setselffunc tp_setself;
+    getselffunc tp_getself;
 
 #ifdef COUNT_ALLOCS
     /* these must be last and never explicitly initialized */
@@ -565,6 +569,8 @@ PyAPI_FUNC(int) PyObject_GenericSetDict(PyObject *, PyObject *, void *);
 #endif
 PyAPI_FUNC(Py_hash_t) PyObject_Hash(PyObject *);
 PyAPI_FUNC(Py_hash_t) PyObject_HashNotImplemented(PyObject *);
+PyAPI_FUNC(int) PyObject_SetSelf(PyObject *, PyObject *);
+PyAPI_FUNC(PyObject *) PyObject_GetSelf(PyObject *);
 PyAPI_FUNC(int) PyObject_IsTrue(PyObject *);
 PyAPI_FUNC(int) PyObject_Not(PyObject *);
 PyAPI_FUNC(int) PyCallable_Check(PyObject *);
