@@ -559,6 +559,7 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
     int oparg;         /* Current opcode argument, if any */
     enum why_code why; /* Reason for block stack unwind */
     PyObject **fastlocals, **freevars;
+    PyObject *metavar_map = NULL;
     PyObject *retval = NULL;            /* Return value */
     PyThreadState *tstate = PyThreadState_GET();
     PyCodeObject *co;
@@ -787,8 +788,10 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
 #define EXT_POP(STACK_POINTER) (*--(STACK_POINTER))
 #endif
 
-/* Local variable macros */
+/* metavar key gen */
+#define GETID(v)      (PyLong_FromVoidPtr(v))
 
+/* Local variable macros */
 #define GETLOCAL(i)     (fastlocals[i])
 
 /* The SETLOCAL() macro must not DECREF the local variable in-place and
@@ -1106,9 +1109,16 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
                     }
                }
                if (notselfmethod) {
+                   if (metavar_map == NULL) {
+                       metavar_map = PyDict_New();
+                       Py_INCREF(metavar_map);
+                   }
                    PyObject * tmp = value;
                    value = PyObject_GetSelf(value);
-                   Py_DECREF(tmp);
+                   PyDict_SetItem(metavar_map, GETID(value), tmp);
+                   // Py_DECREF at the end of the frame now,
+                   // Keeping this until all the work is done
+                   //Py_DECREF(tmp);
                    Py_INCREF(value);
                }
             }
@@ -1672,6 +1682,36 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
 
         TARGET(RETURN_VALUE) {
             retval = POP();
+            // check if the return value is a meta var, only if the metavar
+            // dict is not null keeping this fast
+            if (metavar_map != NULL) {
+                // check if this is a multiple return 
+                if (PyTuple_Check(retval)) {
+                    // check each variable if it is a return
+                    for (Py_ssize_t i = 0; i< PyTuple_Size(retval); ++i) {
+                        PyObject *tmp = PyTuple_GetItem(retval, i);
+                        PyObject *key = GETID(retval);
+                        PyObject *fetched = PyDict_GetItem(metavar_map, key);
+                        if (fetched != NULL) {
+                            Py_DECREF(tmp);
+                            Py_INCREF(fetched);
+                            PyTuple_SetItem(retval, i, fetched);
+                        }
+                    }
+                } else{
+                    // single value, check if it is metavar, if so
+                    // return the metavar instead
+                    PyObject * key = GETID(retval);
+                    PyObject * fetched = PyDict_GetItem(metavar_map, key);
+                    if (fetched != NULL) {
+                        // no longer using retval, as it is going to
+                        // be reassigned
+                        Py_DECREF(retval);
+                        Py_INCREF(fetched);
+                        retval = fetched;
+                    }
+                }
+            }
             why = WHY_RETURN;
             goto fast_block_end;
         }
@@ -2136,6 +2176,11 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
             if (Py_TYPE(v)->tp_getself != NULL) {
                 PyObject * tmp = v;
                 v = PyObject_GetSelf(v);
+                if (metavar_map == NULL) {
+                   metavar_map = PyDict_New();
+                   Py_INCREF(metavar_map);
+                }
+                PyDict_SetItem(metavar_map, GETID(v), tmp);
                 if (v == NULL) {
                     if (PyErr_ExceptionMatches(PyExc_KeyError))
                         format_exc_check_arg(
@@ -2143,7 +2188,8 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
                                     NAME_ERROR_MSG, name);
                     goto error;
                 }
-                Py_DECREF(tmp);
+                // Do this at the end of the frame now
+                // Py_DECREF(tmp);
                 Py_INCREF(v);
             }
             PUSH(v);
@@ -2194,6 +2240,11 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
             if (Py_TYPE(v)->tp_getself != NULL) {
                 PyObject * tmp = v;
                 v = PyObject_GetSelf(v);
+                if (metavar_map == NULL) {
+                   metavar_map = PyDict_New();
+                   Py_INCREF(metavar_map);
+                }
+                PyDict_SetItem(metavar_map, GETID(v), tmp);
                 if (v == NULL) {
                     if (PyErr_ExceptionMatches(PyExc_KeyError))
                         format_exc_check_arg(
@@ -2201,7 +2252,8 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
                                     NAME_ERROR_MSG, name);
                     goto error;
                 }
-                Py_DECREF(tmp);
+                // Do this at the end of the frame now
+                //Py_DECREF(tmp);
                 Py_INCREF(v);
             }
             PUSH(v);
@@ -3132,6 +3184,22 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
 
             sp = stack_pointer;
 
+            // rebind any stack arguments that may be metavars
+            if (metavar_map != NULL) {
+                for (Py_ssize_t i = 0; i < oparg; ++i) {
+                    PyObject * key = GETID(sp[i]);
+                    PyObject * fetched = PyDict_GetItem(metavar_map, key);
+                    if (fetched != NULL) {
+                        // no longer using retval, as it is going to
+                        // be reassigned
+                        Py_DECREF(sp[i]);
+                        Py_INCREF(fetched);
+                        sp[i] = fetched;
+                    }
+
+                }
+            }
+
             meth = PEEK(oparg + 2);
             if (meth == NULL) {
                 /* `meth` is NULL when LOAD_METHOD thinks that it's not
@@ -3179,6 +3247,21 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
         TARGET(CALL_FUNCTION) {
             PyObject **sp, *res;
             sp = stack_pointer;
+            // rebind any stack arguments that may be metavars
+            if (metavar_map != NULL) {
+                for (Py_ssize_t i = 0; i < oparg; ++i) {
+                    PyObject * key = GETID(sp[i]);
+                    PyObject * fetched = PyDict_GetItem(metavar_map, key);
+                    if (fetched != NULL) {
+                        // no longer using retval, as it is going to
+                        // be reassigned
+                        Py_DECREF(sp[i]);
+                        Py_INCREF(fetched);
+                        sp[i] = fetched;
+                    }
+
+                }
+            }
             res = call_function(&sp, oparg, NULL);
             stack_pointer = sp;
             PUSH(res);
@@ -3194,6 +3277,21 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
             names = POP();
             assert(PyTuple_CheckExact(names) && PyTuple_GET_SIZE(names) <= oparg);
             sp = stack_pointer;
+            // rebind any stack arguments that may be metavars
+            if (metavar_map != NULL) {
+                for (Py_ssize_t i = 0; i < oparg; ++i) {
+                    PyObject * key = GETID(sp[i]);
+                    PyObject * fetched = PyDict_GetItem(metavar_map, key);
+                    if (fetched != NULL) {
+                        // no longer using retval, as it is going to
+                        // be reassigned
+                        Py_DECREF(sp[i]);
+                        Py_INCREF(fetched);
+                        sp[i] = fetched;
+                    }
+
+                }
+            }
             res = call_function(&sp, oparg, names);
             stack_pointer = sp;
             PUSH(res);
@@ -3231,6 +3329,24 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
                     kwargs = d;
                 }
                 assert(PyDict_CheckExact(kwargs));
+
+                if (metavar_map != NULL) {
+                    PyObject *kwargs_items = PyDict_Items(kwargs);
+                    PyObject *kwargs_keys = PyDict_Keys(kwargs);
+                    for (Py_ssize_t i = 0; i < PyDict_Size(kwargs); ++i) {
+                        PyObject * key = GETID(PyList_GET_ITEM(kwargs_items, i));
+                        PyObject * fetched = PyDict_GetItem(metavar_map, key);
+                        if (fetched != NULL) {
+                            // no longer using retval, as it is going to
+                            // be reassigned
+                            Py_DECREF(PyDict_GetItem(kwargs, PyList_GetItem(kwargs_keys, i)));
+                            Py_INCREF(fetched);
+                            PyDict_SetItem(kwargs, PyList_GetItem(kwargs_keys, i), fetched);
+                        }
+                    }
+                    Py_DECREF(kwargs_items);
+                    Py_DECREF(kwargs_keys);
+                }
             }
             callargs = POP();
             func = TOP();
@@ -3245,6 +3361,22 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
                 }
             }
             assert(PyTuple_CheckExact(callargs));
+
+            // rebind any stack arguments that may be metavars
+            if (metavar_map != NULL) {
+                for (Py_ssize_t i = 0; i < PyTuple_Size(callargs); ++i) {
+                    PyObject * key = GETID(PyTuple_GET_ITEM(callargs, i));
+                    PyObject * fetched = PyDict_GetItem(metavar_map, key);
+                    if (fetched != NULL) {
+                        // no longer using retval, as it is going to
+                        // be reassigned
+                        Py_DECREF(PyTuple_GET_ITEM(callargs, i));
+                        Py_INCREF(fetched);
+                        PyTuple_SET_ITEM(callargs, i, fetched);
+                    }
+
+                }
+            }
 
             result = do_call_core(func, callargs, kwargs);
             Py_DECREF(func);
@@ -3415,6 +3547,16 @@ error:
 
 fast_block_end:
         assert(why != WHY_NOT);
+
+        /* Py_DECREF any metavars held by the frame */
+        if (metavar_map != NULL) {
+            PyObject *metavar_map_value = PyDict_Values(metavar_map);
+            for (Py_ssize_t i = 0; i < PyList_Size(metavar_map_value); ++i) {
+                PyObject *meta_var_obj = PyList_GET_ITEM(metavar_map_value, i);
+                Py_DECREF(meta_var_obj);
+            }
+            Py_DECREF(metavar_map);
+        }
 
         /* Unwind stacks if a (pseudo) exception occurred */
         while (why != WHY_NOT && f->f_iblock > 0) {
