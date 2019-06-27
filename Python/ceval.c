@@ -3186,15 +3186,15 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
 
             // rebind any stack arguments that may be metavars
             if (metavar_map != NULL) {
-                for (Py_ssize_t i = 0; i < oparg; ++i) {
-                    PyObject * key = GETID(sp[i]);
+                for (Py_ssize_t i = 0; i <= oparg; ++i) {
+                    PyObject * key = GETID(*(sp-i));
                     PyObject * fetched = PyDict_GetItem(metavar_map, key);
                     if (fetched != NULL) {
                         // no longer using retval, as it is going to
                         // be reassigned
                         Py_DECREF(sp[i]);
                         Py_INCREF(fetched);
-                        sp[i] = fetched;
+                        *(sp-i) = fetched;
                     }
 
                 }
@@ -3249,16 +3249,17 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
             sp = stack_pointer;
             // rebind any stack arguments that may be metavars
             if (metavar_map != NULL) {
-                for (Py_ssize_t i = 0; i < oparg; ++i) {
-                    PyObject * key = GETID(sp[i]);
+                for (Py_ssize_t i = 0; i <= oparg; i++) {
+                    PyObject * key = GETID(*(sp-i));
                     PyObject * fetched = PyDict_GetItem(metavar_map, key);
                     if (fetched != NULL) {
                         // no longer using retval, as it is going to
                         // be reassigned
-                        Py_DECREF(sp[i]);
+                        Py_DECREF(*(sp-i));
                         Py_INCREF(fetched);
-                        sp[i] = fetched;
+                        *(sp-i) = fetched;
                     }
+                    Py_DECREF(key);
 
                 }
             }
@@ -3279,15 +3280,15 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
             sp = stack_pointer;
             // rebind any stack arguments that may be metavars
             if (metavar_map != NULL) {
-                for (Py_ssize_t i = 0; i < oparg; ++i) {
-                    PyObject * key = GETID(sp[i]);
+                for (Py_ssize_t i = 0; i <= oparg; ++i) {
+                    PyObject * key = GETID(*(sp-i));
                     PyObject * fetched = PyDict_GetItem(metavar_map, key);
                     if (fetched != NULL) {
                         // no longer using retval, as it is going to
                         // be reassigned
                         Py_DECREF(sp[i]);
                         Py_INCREF(fetched);
-                        sp[i] = fetched;
+                        *(sp-i) = fetched;
                     }
 
                 }
