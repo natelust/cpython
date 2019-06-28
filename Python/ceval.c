@@ -1115,7 +1115,9 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
                    }
                    PyObject * tmp = value;
                    value = PyObject_GetSelf(value);
-                   PyDict_SetItem(metavar_map, GETID(value), tmp);
+                   PyObject * key = GETID(value);
+                   Py_INCREF(key);
+                   PyDict_SetItem(metavar_map, key, tmp);
                    // Py_DECREF at the end of the frame now,
                    // Keeping this until all the work is done
                    //Py_DECREF(tmp);
@@ -2181,7 +2183,9 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
                    metavar_map = PyDict_New();
                    Py_INCREF(metavar_map);
                 }
-                PyDict_SetItem(metavar_map, GETID(v), tmp);
+                PyObject * key = GETID(v);
+                Py_INCREF(key);
+                PyDict_SetItem(metavar_map, key, tmp);
                 if (v == NULL) {
                     if (PyErr_ExceptionMatches(PyExc_KeyError))
                         format_exc_check_arg(
@@ -2245,7 +2249,9 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
                    metavar_map = PyDict_New();
                    Py_INCREF(metavar_map);
                 }
-                PyDict_SetItem(metavar_map, GETID(v), tmp);
+                PyObject * key = GETID(v);
+                Py_INCREF(key);
+                PyDict_SetItem(metavar_map, key, tmp);
                 if (v == NULL) {
                     if (PyErr_ExceptionMatches(PyExc_KeyError))
                         format_exc_check_arg(
@@ -3343,7 +3349,9 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
                             // be reassigned
                             Py_DECREF(PyDict_GetItem(kwargs, PyList_GetItem(kwargs_keys, i)));
                             Py_INCREF(fetched);
-                            PyDict_SetItem(kwargs, PyList_GetItem(kwargs_keys, i), fetched);
+                            PyObject *key = PyList_GetItem(kwargs_keys, i);
+                            Py_INCREF(key);
+                            PyDict_SetItem(kwargs, key, fetched);
                         }
                     }
                     Py_DECREF(kwargs_items);
