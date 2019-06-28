@@ -2173,7 +2173,8 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
                     }
                 }
             }
-            if (Py_TYPE(v)->tp_getself != NULL) {
+            PyTypeObject *tp = Py_TYPE(v);
+            if (tp != NULL && tp->tp_getself != NULL) {
                 PyObject * tmp = v;
                 v = PyObject_GetSelf(v);
                 if (metavar_map == NULL) {
