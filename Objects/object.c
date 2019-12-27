@@ -381,12 +381,12 @@ PyObject_Print(PyObject *op, FILE *fp, int flags)
         Py_END_ALLOW_THREADS
     }
     else {
-        if (op->ob_refcnt <= 0) {
+        if (cabs(op->ob_refcnt) <= 0) {
             /* XXX(twouters) cast refcount to long until %zd is
                universally available */
             Py_BEGIN_ALLOW_THREADS
             fprintf(fp, "<refcnt %ld at %p>",
-                (long)op->ob_refcnt, (void *)op);
+                (long)cabs(op->ob_refcnt), (void *)op);
             Py_END_ALLOW_THREADS
         }
         else {

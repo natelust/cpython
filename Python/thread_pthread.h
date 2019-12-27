@@ -3,6 +3,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <pystate.h>
 #if defined(__APPLE__) || defined(HAVE_PTHREAD_DESTRUCTOR)
 #define destructor xxdestructor
 #endif
@@ -228,7 +229,9 @@ pythread_wrapper(void *arg)
     void (*func)(void *) = callback->func;
     void *func_arg = callback->arg;
     PyMem_RawFree(arg);
-
+    set_gil_thread_ref();
+    double complex * current_ref_val = get_gil_thread_ref();
+    printf(" The new ref dim is %f+%fi\n", crealf(*current_ref_val), cimagf(*current_ref_val));
     func(func_arg);
     return NULL;
 }
@@ -295,6 +298,8 @@ PyThread_start_new_thread(void (*func)(void *), void *arg)
     }
 
     pthread_detach(th);
+    double complex * current_ref_val = get_gil_thread_ref();
+    printf(" The post main ref dim is %f+%fi\n", crealf(*current_ref_val), cimagf(*current_ref_val));
 
 #if SIZEOF_PTHREAD_T <= SIZEOF_LONG
     return (unsigned long) th;

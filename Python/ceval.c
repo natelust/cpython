@@ -84,6 +84,29 @@ static int check_args_iterable(PyThreadState *, PyObject *func, PyObject *vararg
 static void format_kwargs_error(PyThreadState *, PyObject *func, PyObject *kwargs);
 static void format_awaitable_error(PyThreadState *, PyTypeObject *, int);
 
+void
+try_lock(PyObject * obj){
+    if (cimagf(obj->ob_refcnt) > 0) { 
+        if (fabs(carg(obj->ob_refcnt) - carg(*get_gil_thread_ref()))>1e-10){
+        //printf("imag part is %f\n", cimag(obj->ob_refcnt));
+        //printf("the arg obj is %f\n", carg(obj->ob_refcnt));
+        //printf("the arg thread is %f\n", carg(*get_gil_thread_ref()));
+        pthread_mutex_lock(&obj->lock);
+        printf("have the lock\n");
+        }
+    }
+}
+
+void
+try_unlock(PyObject * obj){
+    if (cimagf(obj->ob_refcnt) > 0) { 
+        if (fabs(carg(obj->ob_refcnt) - carg(*get_gil_thread_ref()))>1e-10){
+        pthread_mutex_unlock(&obj->lock);
+        printf("dropped the lock\n");
+        }
+    }
+}
+
 #define NAME_ERROR_MSG \
     "name '%.200s' is not defined"
 #define UNBOUNDLOCAL_ERROR_MSG \
@@ -207,7 +230,11 @@ PyEval_InitThreads(void)
         return;
     }
 
+    init_ref_dim_key();
     PyThread_init_thread();
+    set_gil_thread_ref();
+    double complex * current_ref_val = get_gil_thread_ref();
+    printf(" The new ref dim is %f+%fi\n", crealf(*current_ref_val), cimagf(*current_ref_val));
     create_gil(gil);
     PyThreadState *tstate = _PyRuntimeState_GetThreadState(runtime);
     take_gil(ceval, tstate);
@@ -1339,6 +1366,7 @@ main_loop:
                 goto error;
             }
             Py_INCREF(value);
+            try_lock(value);
             PUSH(value);
             FAST_DISPATCH();
         }
@@ -1355,6 +1383,7 @@ main_loop:
             PREDICTED(STORE_FAST);
             PyObject *value = POP();
             SETLOCAL(oparg, value);
+            try_unlock(value);
             FAST_DISPATCH();
         }
 
@@ -2559,6 +2588,7 @@ main_loop:
                     }
                 }
             }
+            try_lock(v);
             PUSH(v);
             DISPATCH();
         }
@@ -4992,6 +5022,7 @@ call_function(PyThreadState *tstate, PyObject ***pp_stack, Py_ssize_t oparg, PyO
     /* Clear the stack of the function object. */
     while ((*pp_stack) > pfunc) {
         w = EXT_POP(*pp_stack);
+        try_unlock(w);
         Py_DECREF(w);
     }
 

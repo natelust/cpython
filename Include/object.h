@@ -2,11 +2,14 @@
 #define Py_OBJECT_H
 
 #include "pymem.h"   /* _Py_tracemalloc_config */
+#include <complex.h>
+#include <pthread.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+double complex * get_gil_thread_ref(void);
 
 /* Object and type object interface */
 
@@ -103,8 +106,10 @@ whose size is determined when the object is allocated.
  */
 typedef struct _object {
     _PyObject_HEAD_EXTRA
-    Py_ssize_t ob_refcnt;
+    //Py_ssize_t ob_refcnt;
+    double complex ob_refcnt;
     struct _typeobject *ob_type;
+    pthread_mutex_t lock;
 } PyObject;
 
 /* Cast argument to PyObject* type. */
@@ -118,7 +123,7 @@ typedef struct {
 /* Cast argument to PyVarObject* type. */
 #define _PyVarObject_CAST(op) ((PyVarObject*)(op))
 
-#define Py_REFCNT(ob)           (_PyObject_CAST(ob)->ob_refcnt)
+#define Py_REFCNT(ob)           (cabs(_PyObject_CAST(ob)->ob_refcnt))
 #define Py_TYPE(ob)             (_PyObject_CAST(ob)->ob_type)
 #define Py_SIZE(ob)             (_PyVarObject_CAST(ob)->ob_size)
 
@@ -440,7 +445,8 @@ static inline void _Py_NewReference(PyObject *op)
     }
     _Py_INC_TPALLOCS(op);
     _Py_INC_REFTOTAL;
-    Py_REFCNT(op) = 1;
+    op->ob_refcnt = *get_gil_thread_ref();
+    //Py_REFCNT(op) = 1;
 }
 
 static inline void _Py_ForgetReference(PyObject *op)
@@ -456,10 +462,18 @@ PyAPI_FUNC(void) _Py_Dealloc(PyObject *);
 static inline void _Py_INCREF(PyObject *op)
 {
     _Py_INC_REFTOTAL;
-    op->ob_refcnt++;
+    //op->ob_refcnt++;
+    op->ob_refcnt += * get_gil_thread_ref();
 }
 
+static inline void _Py_INITREF(PyObject *op)
+{
+    op->ob_refcnt = * get_gil_thread_ref();
+}
+
+#define Py_INITREF(op) _Py_INITREF(_PyObject_CAST(op))
 #define Py_INCREF(op) _Py_INCREF(_PyObject_CAST(op))
+#define Py_THREADREF * get_gil_thread_ref()
 
 static inline void _Py_DECREF(const char *filename, int lineno,
                               PyObject *op)
@@ -467,7 +481,8 @@ static inline void _Py_DECREF(const char *filename, int lineno,
     (void)filename; /* may be unused, shut up -Wunused-parameter */
     (void)lineno; /* may be unused, shut up -Wunused-parameter */
     _Py_DEC_REFTOTAL;
-    if (--op->ob_refcnt != 0) {
+    op-> ob_refcnt -= * get_gil_thread_ref();
+    if (op->ob_refcnt != 0) {
 #ifdef Py_REF_DEBUG
         if (op->ob_refcnt < 0) {
             _Py_NegativeRefcount(filename, lineno, op);

@@ -1646,10 +1646,13 @@ because it includes the (temporary) reference as an argument to
 getrefcount().
 [clinic start generated code]*/
 
-static Py_ssize_t
+//static Py_ssize_t
+static double complex
 sys_getrefcount_impl(PyObject *module, PyObject *object)
 /*[clinic end generated code: output=5fd477f2264b85b2 input=bf474efd50a21535]*/
 {
+    double complex current_ref_val = object->ob_refcnt;
+    printf(" The post main ref dim is %f+%fi\n", crealf(current_ref_val), cimagf(current_ref_val));
     return object->ob_refcnt;
 }
 

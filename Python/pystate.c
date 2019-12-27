@@ -7,6 +7,9 @@
 #include "pycore_pymem.h"
 #include "pycore_pystate.h"
 #include "pycore_pylifecycle.h"
+#include <pthread.h>
+#include <complex.h>
+#include <math.h>
 
 /* --------------------------------------------------------------------------
 CAUTION
@@ -41,6 +44,82 @@ extern "C" {
 static PyThreadState *_PyGILState_GetThisThreadState(struct _gilstate_runtime_state *gilstate);
 static void _PyThreadState_Delete(_PyRuntimeState *runtime, PyThreadState *tstate);
 
+static pthread_mutex_t thread_dimension_mutex;
+static Py_tss_t gil_ref_tss_key = Py_tss_NEEDS_INIT;
+
+void
+init_ref_dim_key() {
+    PyThread_tss_create(&gil_ref_tss_key);
+}
+
+static double complex all_thread_dims[] = {
+    1+0*I,
+    0.8660252915835662+0.5000001943375613*I,
+    0.7547094330062515+0.6560591983437032*I,
+    0.5446388468219389+0.8386706901594145*I,
+    0.3446388468219389+0.9386706901594145*I,
+    0.2446388468219389+0.9786706901594145*I
+};
+
+static double complex used_thread_dims[] = {0,0,0,0,0,0};
+
+double complex *
+get_ref_dim()
+{
+    pthread_mutex_lock(&thread_dimension_mutex);
+    double complex * ret_val = 0;
+    for (int i=0; i<6; ++i){
+        bool used = 0;
+        for(int j=0; j<6; ++j){
+            if( all_thread_dims[i] == used_thread_dims[j]){
+                used = 1;
+                break;
+            }
+        }
+        if (used != 1) {
+            ret_val = &all_thread_dims[i];
+            for (int j=0; j<6; ++j){
+                if (used_thread_dims[j] == 0){
+                    used_thread_dims[j] = *ret_val;
+                    break;
+                }
+            }
+            break;
+        }
+    }
+    if (ret_val == 0){
+        printf("did not get thread die\n");
+    }
+    pthread_mutex_unlock(&thread_dimension_mutex);
+    return ret_val;
+}
+
+void
+return_ref_dim(double complex * ref_val){
+    for (int j=0; j<6; ++j){
+        if (used_thread_dims[j] == *ref_val){
+            used_thread_dims[j] = 0;
+        }
+    }
+}
+
+void set_gil_thread_ref(){
+    PyThread_tss_set(&gil_ref_tss_key, (void *) get_ref_dim());
+}
+
+void clear_gil_thread_ref(double complex * ref_val){
+    return_ref_dim(ref_val);
+    PyThread_tss_set(&gil_ref_tss_key, (void *) NULL);
+} 
+
+double complex *
+get_gil_thread_ref() {
+    return (double complex *) PyThread_tss_get(&gil_ref_tss_key);
+}
+
+void set_gil_ref_tss_key(){
+    PyThread_tss_set(&gil_ref_tss_key, (void *) get_ref_dim());
+}
 
 static PyStatus
 _PyRuntimeState_Init_impl(_PyRuntimeState *runtime)
@@ -83,6 +162,7 @@ _PyRuntimeState_Init_impl(_PyRuntimeState *runtime)
 
     // Set it to the ID of the main thread of the main interpreter.
     runtime->main_thread = PyThread_get_thread_ident();
+    pthread_mutex_init(& thread_dimension_mutex, NULL);
 
     return _PyStatus_OK();
 }
@@ -608,6 +688,11 @@ new_threadstate(PyInterpreterState *interp, int init)
 
     tstate->id = ++interp->tstate_next_unique_id;
 
+    //tstate->ref_dim = get_ref_dim();
+
+    //printf(" The ref dim is %f+%fi\n", crealf(tstate->ref_dim), cimagf(tstate->ref_dim));
+
+
     if (init) {
         _PyThreadState_Init(runtime, tstate);
     }
@@ -820,6 +905,7 @@ tstate_delete_common(_PyRuntimeState *runtime, PyThreadState *tstate)
     if (tstate->on_delete != NULL) {
         tstate->on_delete(tstate->on_delete_data);
     }
+    clear_gil_thread_ref(get_gil_thread_ref());
     PyMem_RawFree(tstate);
 }
 

@@ -736,7 +736,8 @@ PyDoc_STRVAR(sys_getrefcount__doc__,
 #define SYS_GETREFCOUNT_METHODDEF    \
     {"getrefcount", (PyCFunction)sys_getrefcount, METH_O, sys_getrefcount__doc__},
 
-static Py_ssize_t
+//static Py_ssize_t
+static double complex
 sys_getrefcount_impl(PyObject *module, PyObject *object);
 
 static PyObject *

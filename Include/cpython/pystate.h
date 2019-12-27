@@ -7,11 +7,17 @@ extern "C" {
 #endif
 
 #include "cpython/initconfig.h"
+#include <complex.h>
 
 PyAPI_FUNC(int) _PyInterpreterState_RequiresIDRef(PyInterpreterState *);
 PyAPI_FUNC(void) _PyInterpreterState_RequireIDRef(PyInterpreterState *, int);
 
 PyAPI_FUNC(PyObject *) _PyInterpreterState_GetMainModule(PyInterpreterState *);
+
+double complex * get_ref_dim(void);
+void set_gil_thread_ref(void);
+void init_ref_dim_key(void);
+double complex * get_gil_thread_ref(void);
 
 /* State unique per thread */
 
@@ -134,6 +140,7 @@ struct _ts {
 
     /* Unique thread state id. */
     uint64_t id;
+    //double complex ref_dim;
 
     /* XXX signal handlers should also be here */
 
