@@ -11,6 +11,7 @@
 #undef destructor
 #endif
 #include <signal.h>
+#include "pystate.h"
 
 #if defined(__linux__)
 #   include <sys/syscall.h>     /* syscall(SYS_gettid) */
@@ -229,6 +230,7 @@ pythread_wrapper(void *arg)
     void *func_arg = callback->arg;
     PyMem_RawFree(arg);
 
+    set_thread_marker_key();
     func(func_arg);
     return NULL;
 }

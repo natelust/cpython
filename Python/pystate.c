@@ -42,6 +42,29 @@ static PyThreadState *_PyGILState_GetThisThreadState(struct _gilstate_runtime_st
 static void _PyThreadState_Delete(_PyRuntimeState *runtime, PyThreadState *tstate);
 
 
+static Py_tss_t thread_marker_key = Py_tss_NEEDS_INIT;
+
+const uint32_t NUMBER_THREADS = 50;
+
+void set_thread_marker_key(){
+    thread_marker *current_thread_marker = malloc(sizeof(thread_marker));
+    current_thread_marker-> wait_count = 0;
+    current_thread_marker->is_marker = 1;
+    PyThread_tss_set(&thread_marker_key, (void *) thread_marker);
+}
+
+
+thread_barrier get_thread_marker_key(){
+    thread_barrier current_thread_barrier;
+    current_thread_barrier.thread_marker_pointer = (thread_marker *) PyThread_tss_get(&thread_marker_key);
+    return current_thread_barrier;
+}
+
+void cleanup_thread_marker_key() {
+    thread_marker * current_thread_marker = get_thread_marker_key();
+    free(current_thread_marker);
+}
+
 static PyStatus
 _PyRuntimeState_Init_impl(_PyRuntimeState *runtime)
 {
@@ -607,6 +630,7 @@ new_threadstate(PyInterpreterState *interp, int init)
     tstate->context_ver = 1;
 
     tstate->id = ++interp->tstate_next_unique_id;
+    pthread_mutex_init(&tstate->thread_lock, NULL);
 
     if (init) {
         _PyThreadState_Init(runtime, tstate);
@@ -820,6 +844,7 @@ tstate_delete_common(_PyRuntimeState *runtime, PyThreadState *tstate)
     if (tstate->on_delete != NULL) {
         tstate->on_delete(tstate->on_delete_data);
     }
+    cleanup_thread_marker_key();
     PyMem_RawFree(tstate);
 }
 

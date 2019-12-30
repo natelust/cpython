@@ -25,6 +25,7 @@
 #include "pydtrace.h"
 #include "setobject.h"
 #include "structmember.h"
+#include "pystate.h"
 
 #include <ctype.h>
 
@@ -208,6 +209,7 @@ PyEval_InitThreads(void)
     }
 
     PyThread_init_thread();
+    set_thread_marker_key();
     create_gil(gil);
     PyThreadState *tstate = _PyRuntimeState_GetThreadState(runtime);
     take_gil(ceval, tstate);
@@ -706,6 +708,47 @@ _Py_CheckRecursiveCall(const char *where)
     return 0;
 }
 
+void try_lock(PyObject * obj, PyThreadState *tstate, thread_barrier * current_thread_marker){
+    thread_barrier old_value, new_value;
+    old_value.thread_marker_pointer = NULL;
+    thread_marker * pointer_for_free;
+    thread_marker * new_marker = NULL;
+
+    thread_barrier * new_value_pointer = current_thread_marker;
+
+    while (!atomic_compare_exchange_weak(obj->barrier, &old_value, new_value_pointer)){
+        if (old_value == current_thread_marker) {
+            break;
+        } else {
+            pointer_for_free = NULL;
+            if (new_marker == NULL){
+                new_marker = malloc(sizeof(thread_marker));
+            }
+            for (int i = 0; i < old_value.thread_marker_pointer->wait_count; i++) {
+                new_marker->locks[i] = old_value.thread_marker_pointer->locks[i]
+            }
+            new_marker->wait_count = old_value.thread_marker_pointer->wait_count + 1;
+            new_marker->is_marker = 0;
+            new_marker->locks[new_marker->wait_count - 1] = &(tstate->thread_lock);
+
+            if (!old_value.thread_marker->is_marker) {
+                pointer_for_free = old_value.thread_marker;
+            }
+
+            new_value.thread_marker_pointer = new_marker;
+            new_value_pointer = &new_value;
+        }
+        if ( pointer_for_free != NULL) {
+            free(pointer_for_free);
+        }
+        pthread_mutex_lock(&(tstate->thread_lock));
+        printf("thread lock aquired\n");
+        pthread_mutex_lock(&(tstate->thread_lock));
+        printf("thread_lock_released\n");
+        pthread_mutex_unlock(&(tstate->thread_lock));
+    }
+}
+
 static int do_raise(PyThreadState *tstate, PyObject *exc, PyObject *cause);
 static int unpack_iterable(PyThreadState *, PyObject *, int, int, PyObject **);
 
@@ -758,6 +801,7 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
     struct _ceval_runtime_state * const ceval = &runtime->ceval;
     _Py_atomic_int * const eval_breaker = &ceval->eval_breaker;
     PyCodeObject *co;
+    thread_barrier  current_thread_marker = get_thread_marker_key();
 
     /* when tracing we set things up so that
 

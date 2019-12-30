@@ -1,3 +1,4 @@
+#include "pystate.h"
 #ifndef Py_OBJECT_H
 #define Py_OBJECT_H
 
@@ -105,6 +106,7 @@ typedef struct _object {
     _PyObject_HEAD_EXTRA
     Py_ssize_t ob_refcnt;
     struct _typeobject *ob_type;
+    thread_barrier barrier;
 } PyObject;
 
 /* Cast argument to PyObject* type. */
