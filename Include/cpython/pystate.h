@@ -6,26 +6,14 @@
 extern "C" {
 #endif
 
-#include <pythread.h>
-#include <stdatomic.h>
+#include "pythread.h"
 #include "cpython/initconfig.h"
+#include "thread_stuff.h"
 
 PyAPI_FUNC(int) _PyInterpreterState_RequiresIDRef(PyInterpreterState *);
 PyAPI_FUNC(void) _PyInterpreterState_RequireIDRef(PyInterpreterState *, int);
 
 PyAPI_FUNC(PyObject *) _PyInterpreterState_GetMainModule(PyInterpreterState *);
-
-const uint32_t NUMBER_THREADS = 50;
-
-typedef _Atomic struct thread_marker {
-    bool is_marker;
-    uint32_t wait_count;
-    pthread_mutex_t *locks[NUMBER_THREADS];    
-} thread_marker;
-
-typedef _Atomic struct thread_barrier {
-    tread_marker * thread_marker_pointer;
-} thread_barrier;
 
 void set_thread_marker_key();
 

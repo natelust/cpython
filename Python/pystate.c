@@ -50,7 +50,7 @@ void set_thread_marker_key(){
     thread_marker *current_thread_marker = malloc(sizeof(thread_marker));
     current_thread_marker-> wait_count = 0;
     current_thread_marker->is_marker = 1;
-    PyThread_tss_set(&thread_marker_key, (void *) thread_marker);
+    PyThread_tss_set(&thread_marker_key, (void *) current_thread_marker);
 }
 
 
@@ -61,8 +61,8 @@ thread_barrier get_thread_marker_key(){
 }
 
 void cleanup_thread_marker_key() {
-    thread_marker * current_thread_marker = get_thread_marker_key();
-    free(current_thread_marker);
+    thread_barrier current_thread_marker = get_thread_marker_key();
+    free(current_thread_marker.thread_marker_pointer);
 }
 
 static PyStatus
