@@ -201,6 +201,7 @@ PyEval_ThreadsInitialized(void)
 void
 PyEval_InitThreads(void)
 {
+    init_thread_marker_key();
     _PyRuntimeState *runtime = &_PyRuntime;
     struct _ceval_runtime_state *ceval = &runtime->ceval;
     struct _gil_runtime_state *gil = &ceval->gil;
@@ -716,14 +717,17 @@ void try_lock(PyObject * obj, PyThreadState *tstate, thread_barrier * current_th
     _Bool created_new = 0;
 
     new_value.thread_marker_pointer = current_thread_marker->thread_marker_pointer;
-
-    while (atomic_compare_exchange_weak(&obj->barrier, &old_value, new_value) == 0){
+    printf("in ty lock\n");
+    printf("the starting marker pointer address is %p\n", (void *) current_thread_marker->thread_marker_pointer); 
+    printf("The pyobject is %p\n", (void *) obj);
+    while (atomic_compare_exchange_strong(&obj->barrier, &old_value, new_value) == 0){
         printf("the marker pointer address is %p\n", (void *) old_value.thread_marker_pointer); 
+        printf("is marker %hu\n", old_value.thread_marker_pointer->is_marker);
         if (old_value.thread_marker_pointer == current_thread_marker->thread_marker_pointer) {
             //printf("already have thread\n");
             break;
         } else if (old_value.thread_marker_pointer == NULL) {
-            printf("is null now set it\n");
+            //printf("is null now set it\n");
             new_value.thread_marker_pointer = current_thread_marker->thread_marker_pointer;
         } else {
             printf("need to increment it\n");
@@ -732,14 +736,15 @@ void try_lock(PyObject * obj, PyThreadState *tstate, thread_barrier * current_th
                 new_marker = malloc(sizeof(thread_marker));
                 created_new = 1;
             }
-            for (uint i = 0; i < old_value.thread_marker_pointer->wait_count; i++) {
+            for (unsigned int i = 0; i < old_value.thread_marker_pointer->wait_count; i++) {
                 new_marker->locks[i] = old_value.thread_marker_pointer->locks[i];
             }
             new_marker->wait_count = old_value.thread_marker_pointer->wait_count + 1;
             new_marker->is_marker = 0;
             new_marker->locks[new_marker->wait_count - 1] = &(tstate->thread_lock);
 
-            if (!old_value.thread_marker_pointer->is_marker) {
+            //printf("is marker %hu\n", old_value.thread_marker_pointer->is_marker);
+            if (old_value.thread_marker_pointer->is_marker == 0) {
                 pointer_for_free = old_value.thread_marker_pointer;
             }
 
@@ -748,13 +753,14 @@ void try_lock(PyObject * obj, PyThreadState *tstate, thread_barrier * current_th
     }
     if ( pointer_for_free != NULL) {
         printf("freeing\n");
-        free(pointer_for_free);
+        printf("The pointer for free is %p\n", (void *) pointer_for_free);
+        //free(pointer_for_free);
     }
     if (created_new) {
         printf("locking\n");
     
         pthread_mutex_lock(&(tstate->thread_lock));
-        printf("thread lock aquired\n");
+        printf("thread lock aquired on pointer %p\n", (void *) obj);
         Py_BEGIN_ALLOW_THREADS
         pthread_mutex_lock(&(tstate->thread_lock));
         Py_END_ALLOW_THREADS
@@ -771,34 +777,38 @@ void try_unlock(PyObject * obj, thread_barrier * current_thread_marker) {
     thread_marker * new_thread_marker = NULL;
     _Bool do_something = 1;
 
+    //printf("in unlock the marker pointer address is %p\n", (void *) old_value.thread_marker_pointer); 
+    //printf("in unlock the current marker pointer address is %p\n", (void *) current_thread_marker->thread_marker_pointer); 
+    //printf("The pyobject is %p\n", (void *) obj);
     while (atomic_compare_exchange_strong(&obj->barrier, &old_value, new_value)==0){
         thread_marker_holder = old_value.thread_marker_pointer;
-        printf("in unlock the marker pointer address is %p\n", (void *) old_value.thread_marker_pointer); 
-        printf("in unlock the other marker pointer address is %p\n", (void *) thread_marker_holder); 
+        //printf("in unlock the other marker pointer address is %p\n", (void *) thread_marker_holder); 
         if (thread_marker_holder == NULL){
-            printf("breaking\n");
+            // This will be removed when all the op codes are handled
+            //printf("breaking\n");
             do_something = 0;
             break;
         }
+        //printf("the waitcount is %i\n", thread_marker_holder->wait_count);
         if (thread_marker_holder->wait_count >= 1) {
             if (new_thread_marker == NULL) {
               new_thread_marker = malloc(sizeof(thread_marker));  
             }
             new_thread_marker->wait_count = thread_marker_holder->wait_count -1;
             new_thread_marker->is_marker = 0;
-            for (uint i = 1; i < thread_marker_holder->wait_count; i++){
+            for (unsigned int i = 1; i < thread_marker_holder->wait_count; i++){
                 new_thread_marker->locks[i-1] = thread_marker_holder->locks[i];
             }
             new_value.thread_marker_pointer = new_thread_marker;
             printf("setting new value malloc\n");
         } else { 
-            printf("setting current\n");
-            new_value.thread_marker_pointer = current_thread_marker->thread_marker_pointer;
+            //printf("setting current\n");
+            //new_value.thread_marker_pointer = current_thread_marker->thread_marker_pointer;
         }
     }
     if (do_something) {
         if (thread_marker_holder != NULL) {
-            printf("is marker %i\n", thread_marker_holder->is_marker);
+            //printf("is marker %i\n", thread_marker_holder->is_marker);
             if (thread_marker_holder->is_marker == 0) {
             pthread_mutex_unlock(thread_marker_holder->locks[0]);
             free(thread_marker_holder);
@@ -1580,6 +1590,8 @@ main_loop:
             PyObject *right = POP();
             PyObject *left = TOP();
             PyObject *res = PyNumber_Multiply(left, right);
+            try_unlock(right, &current_thread_marker);
+            try_unlock(left, &current_thread_marker);
             Py_DECREF(left);
             Py_DECREF(right);
             SET_TOP(res);

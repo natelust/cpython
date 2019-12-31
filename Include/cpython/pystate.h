@@ -15,11 +15,13 @@ PyAPI_FUNC(void) _PyInterpreterState_RequireIDRef(PyInterpreterState *, int);
 
 PyAPI_FUNC(PyObject *) _PyInterpreterState_GetMainModule(PyInterpreterState *);
 
-void set_thread_marker_key();
 
-thread_barrier get_thread_marker_key();
+void init_thread_marker_key(void);
+void set_thread_marker_key(void);
 
-void cleanup_thread_marker_key();
+thread_barrier get_thread_marker_key(void);
+
+void cleanup_thread_marker_key(void);
 
 /* State unique per thread */
 
