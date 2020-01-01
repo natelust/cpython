@@ -56,7 +56,10 @@ void set_thread_marker_key(){
     thread_marker *current_thread_marker = malloc(sizeof(thread_marker));
     current_thread_marker-> wait_count = 0;
     current_thread_marker->is_marker = 1;
-    current_thread_marker->msg = "hello";
+    //memset(current_thread_marker->locks, NULL, NUMBER_THREADS_CXE *sizeof(current_thread_marker->locks));
+    for (unsigned int i = 0; i < NUMBER_THREADS_CXE; i++ ){
+        current_thread_marker->locks[i] = NULL;
+    }
     PyThread_tss_set(&thread_marker_key, (void *) current_thread_marker);
 }
 
@@ -64,14 +67,14 @@ void set_thread_marker_key(){
 thread_barrier get_thread_marker_key(){
     thread_barrier current_thread_barrier;
     current_thread_barrier.thread_marker_pointer = (thread_marker *) PyThread_tss_get(&thread_marker_key);
-    printf("the loaded marker is %p and the is_marker %hu\n", (void *)current_thread_barrier.thread_marker_pointer, current_thread_barrier.thread_marker_pointer->is_marker);
+    //printf("the loaded marker is %p and the is_marker %hu\n", (void *)current_thread_barrier.thread_marker_pointer, current_thread_barrier.thread_marker_pointer->is_marker);
     return current_thread_barrier;
 }
 
 void cleanup_thread_marker_key() {
     thread_barrier current_thread_marker = get_thread_marker_key();
     printf("cleaning up %p\n", (void *) current_thread_marker.thread_marker_pointer);
-    //free(current_thread_marker.thread_marker_pointer);
+    free(current_thread_marker.thread_marker_pointer);
 }
 
 static PyStatus
