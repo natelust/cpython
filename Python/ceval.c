@@ -720,7 +720,7 @@ void try_lock(PyObject * obj, PyThreadState *tstate, thread_barrier * current_th
     _Bool created_new = 0;
 
     new_value.thread_marker_pointer = current_thread_marker->thread_marker_pointer;
-    //printf("lock %p from %p\n", (void *)obj, (void *) current_thread_marker->thread_marker_pointer);
+    printf("lock %p from %p\n", (void *)obj, (void *) current_thread_marker->thread_marker_pointer);
     while (atomic_compare_exchange_strong(&obj->barrier, &old_value, new_value) == 0){
         if (old_value.thread_marker_pointer == current_thread_marker->thread_marker_pointer) {
             break;
@@ -771,7 +771,7 @@ void try_unlock(PyObject * obj, thread_barrier * current_thread_marker) {
     thread_marker * thread_marker_holder = NULL;
     thread_marker * new_thread_marker = NULL;
 
-    //printf("unlock %p from %p\n", (void *)obj, (void *) current_thread_marker->thread_marker_pointer);
+    printf("unlock %p from %p\n", (void *)obj, (void *) current_thread_marker->thread_marker_pointer);
     while (atomic_compare_exchange_strong(&obj->barrier, &old_value, new_value)==0){
         thread_marker_holder = old_value.thread_marker_pointer;
         if (thread_marker_holder == NULL){
