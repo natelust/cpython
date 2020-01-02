@@ -4,6 +4,8 @@
 extern "C" {
 #endif
 
+void try_lock(PyObject * , PyThreadState *, thread_barrier * );
+void try_unlock(PyObject *, thread_barrier * );
 
 /* Interface to random parts in ceval.c */
 
@@ -136,7 +138,7 @@ PyAPI_FUNC(const char *) PyEval_GetFuncDesc(PyObject *);
 PyAPI_FUNC(PyObject *) PyEval_EvalFrame(struct _frame *);
 PyAPI_FUNC(PyObject *) PyEval_EvalFrameEx(struct _frame *f, int exc);
 #ifndef Py_LIMITED_API
-PyAPI_FUNC(PyObject *) _PyEval_EvalFrameDefault(struct _frame *f, int exc);
+PyAPI_FUNC(PyObject *) _PyEval_EvalFrameDefault(struct _frame *f, int exc, PyThreadState *);
 #endif
 
 /* Interface for threads.

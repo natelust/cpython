@@ -145,6 +145,7 @@ struct _ts {
     /* Unique thread state id. */
     uint64_t id;
     pthread_mutex_t thread_lock;
+    thread_barrier current_thread_barrier;
 
     /* XXX signal handlers should also be here */
 

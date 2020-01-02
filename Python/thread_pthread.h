@@ -230,7 +230,7 @@ pythread_wrapper(void *arg)
     void *func_arg = callback->arg;
     PyMem_RawFree(arg);
 
-    set_thread_marker_key();
+    //set_thread_marker_key();
     func(func_arg);
     return NULL;
 }

@@ -675,6 +675,9 @@ _PyThreadState_Prealloc(PyInterpreterState *interp)
 void
 _PyThreadState_Init(_PyRuntimeState *runtime, PyThreadState *tstate)
 {
+    set_thread_marker_key();
+    thread_barrier tmp = get_thread_marker_key();
+    tstate->current_thread_barrier = tmp;
     _PyGILState_NoteThreadState(&runtime->gilstate, tstate);
 }
 
