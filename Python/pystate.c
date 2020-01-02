@@ -74,7 +74,7 @@ thread_barrier get_thread_marker_key(){
 
 void cleanup_thread_marker_key() {
     thread_barrier current_thread_marker = get_thread_marker_key();
-    printf("cleaning up %p\n", (void *) current_thread_marker.thread_marker_pointer);
+    //printf("cleaning up %p\n", (void *) current_thread_marker.thread_marker_pointer);
     free(current_thread_marker.thread_marker_pointer);
 }
 
@@ -889,7 +889,8 @@ static void
 _PyThreadState_DeleteCurrent(_PyRuntimeState *runtime)
 {
     struct _gilstate_runtime_state *gilstate = &runtime->gilstate;
-    PyThreadState *tstate = _PyRuntimeGILState_GetThreadState(gilstate);
+    //PyThreadState *tstate = _PyRuntimeGILState_GetThreadState(gilstate);
+    PyThreadState *tstate = _PyRuntimeState_GetThreadState(runtime);
     if (tstate == NULL)
         Py_FatalError(
             "PyThreadState_DeleteCurrent: no current tstate");
@@ -968,26 +969,32 @@ PyThreadState_Get(void)
 PyThreadState *
 _PyThreadState_Swap(struct _gilstate_runtime_state *gilstate, PyThreadState *newts)
 {
-    PyThreadState *oldts = _PyRuntimeGILState_GetThreadState(gilstate);
+    PyThreadState *oldts = (PyThreadState *) PyThread_tss_get(&gilstate->autoTSSkey);
+    PyThread_tss_set(&gilstate->autoTSSkey, (void *) newts);
+    //PyThreadState *oldts = _PyRuntimeGILState_GetThreadState(gilstate);
 
-    _PyRuntimeGILState_SetThreadState(gilstate, newts);
+    //_PyRuntimeGILState_SetThreadState(gilstate, newts);
     /* It should not be possible for more than one thread state
        to be used for a thread.  Check this the best we can in debug
        builds.
     */
-#if defined(Py_DEBUG)
-    if (newts) {
-        /* This can be called from PyEval_RestoreThread(). Similar
-           to it, we need to ensure errno doesn't change.
-        */
-        int err = errno;
-        PyThreadState *check = _PyGILState_GetThisThreadState(gilstate);
-        if (check && check->interp == newts->interp && check != newts)
-            Py_FatalError("Invalid thread state for this thread");
-        errno = err;
+//#if defined(Py_DEBUG)
+    //if (newts) {
+    //    /* This can be called from PyEval_RestoreThread(). Similar
+    //       to it, we need to ensure errno doesn't change.
+    //    */
+    //    int err = errno;
+    //    PyThreadState *check = _PyGILState_GetThisThreadState(gilstate);
+    //    if (check && check->interp == newts->interp && check != newts)
+    //        Py_FatalError("Invalid thread state for this thread");
+    //    errno = err;
+    //}
+//#endif
+    if (oldts == newts) {
+        oldts = NULL;
     }
-#endif
     return oldts;
+    
 }
 
 PyThreadState *

@@ -270,8 +270,10 @@ PyAPI_FUNC(void) _PyRuntime_Finalize(void);
 /* Variable and macro for in-line access to current thread
    and interpreter state */
 
+//#define _PyRuntimeState_GetThreadState(runtime) \
+//    ((PyThreadState*)_Py_atomic_load_relaxed(&(runtime)->gilstate.tstate_current))
 #define _PyRuntimeState_GetThreadState(runtime) \
-    ((PyThreadState*)_Py_atomic_load_relaxed(&(runtime)->gilstate.tstate_current))
+    ((PyThreadState*) PyThread_tss_get(&((runtime)->gilstate.autoTSSkey)))
 
 /* Get the current Python thread state.
 

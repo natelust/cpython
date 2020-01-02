@@ -379,6 +379,8 @@ PyEval_SaveThread(void)
     _PyRuntimeState *runtime = &_PyRuntime;
     struct _ceval_runtime_state *ceval = &runtime->ceval;
     PyThreadState *tstate = _PyThreadState_Swap(&runtime->gilstate, NULL);
+    //PyThreadState *tstate = PyThread_tss_get(&runtime->gilstate.autoTSSkey);
+    //PyThread_tss_set(&runtime->gilstate.autoTSSkey, NULL);
     if (tstate == NULL) {
         Py_FatalError("PyEval_SaveThread: NULL tstate");
     }
@@ -404,6 +406,7 @@ PyEval_RestoreThread(PyThreadState *tstate)
     errno = err;
 
     _PyThreadState_Swap(&runtime->gilstate, tstate);
+    //PyThread_tss_set(&runtime->gilstate.autoTSSkey, tstate);
 }
 
 
@@ -724,8 +727,8 @@ void try_lock(PyObject * obj, PyThreadState *tstate, thread_barrier * current_th
         } else if (old_value.thread_marker_pointer == NULL) {
             new_value.thread_marker_pointer = current_thread_marker->thread_marker_pointer;
         } else {
-            printf("need to increment it\n");
-            printf("the current lock pointer at 0 is %p\n", (void *) old_value.thread_marker_pointer->locks[0]);
+            //printf("need to increment it\n");
+            //printf("the current lock pointer at 0 is %p\n", (void *) old_value.thread_marker_pointer->locks[0]);
             pointer_for_free = NULL;
             if (new_marker == NULL){
                 new_marker = malloc(sizeof(thread_marker));
@@ -746,17 +749,17 @@ void try_lock(PyObject * obj, PyThreadState *tstate, thread_barrier * current_th
         }
     }
     if ( pointer_for_free != NULL) {
-        printf("The pointer for free is %p\n", (void *) pointer_for_free);
+        //printf("The pointer for free is %p\n", (void *) pointer_for_free);
         free(pointer_for_free);
     }
     if (created_new) {
-        printf("running pthread lock on pointer %p\n", &(tstate->thread_lock));
+        //printf("running pthread lock on pointer %p\n", &(tstate->thread_lock));
         pthread_mutex_lock(&(tstate->thread_lock));
-        printf("thread lock aquired on pointer %p\n", (void *) obj);
+        //printf("thread lock aquired on pointer %p\n", (void *) obj);
         Py_BEGIN_ALLOW_THREADS
         pthread_mutex_lock(&(tstate->thread_lock));
         Py_END_ALLOW_THREADS
-        printf("thread_lock_released\n");
+        //printf("thread_lock_released\n");
         pthread_mutex_unlock(&(tstate->thread_lock));
     }
 }
@@ -778,7 +781,7 @@ void try_unlock(PyObject * obj, thread_barrier * current_thread_marker) {
 
         if (thread_marker_holder->wait_count >= 1) {
             if (new_thread_marker == NULL) {
-                printf("mallocing new_thread_marker\n");
+                //printf("mallocing new_thread_marker\n");
                 new_thread_marker = malloc(sizeof(thread_marker));  
             }
             new_thread_marker->wait_count = thread_marker_holder->wait_count -1;
@@ -787,9 +790,9 @@ void try_unlock(PyObject * obj, thread_barrier * current_thread_marker) {
                 new_thread_marker->locks[i-1] = thread_marker_holder->locks[i];
             }
             new_value.thread_marker_pointer = new_thread_marker;
-            printf("the old thread_marker_holder wait count is %hu\n", thread_marker_holder->wait_count);
-            printf("the old thread_marker_holder is marker %hu\n", thread_marker_holder->is_marker);
-            printf("setting new value malloc\n");
+            //printf("the old thread_marker_holder wait count is %hu\n", thread_marker_holder->wait_count);
+            //printf("the old thread_marker_holder is marker %hu\n", thread_marker_holder->is_marker);
+            //printf("setting new value malloc\n");
         } 
     }
     if (thread_marker_holder != NULL) {
@@ -798,7 +801,7 @@ void try_unlock(PyObject * obj, thread_barrier * current_thread_marker) {
             // check if the lock is a null pointer, as the last marker in the chain will actually be
             // the contents of a thread level marker
             if (thread_marker_holder->locks[0] != NULL &&  thread_marker_holder->wait_count != 0) {
-                printf("running pthread unlock on pointer %p\n", thread_marker_holder->locks[0]);
+                //printf("running pthread unlock on pointer %p\n", thread_marker_holder->locks[0]);
                 pthread_mutex_unlock(thread_marker_holder->locks[0]);
             }
             free(thread_marker_holder);
