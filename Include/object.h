@@ -106,7 +106,7 @@ typedef struct _object {
     _PyObject_HEAD_EXTRA
     Py_ssize_t ob_refcnt;
     struct _typeobject *ob_type;
-    _Atomic thread_barrier barrier;
+    _Atomic (thread_marker *) barrier;
 } PyObject;
 
 /* Cast argument to PyObject* type. */
@@ -437,15 +437,13 @@ PyAPI_FUNC(void) _Py_AddToAllObjects(PyObject *, int force);
    inline. */
 static inline void _Py_NewReference(PyObject *op)
 {
-    thread_barrier tmp;
-    tmp.thread_marker_pointer = NULL;
     if (_Py_tracemalloc_config.tracing) {
         _PyTraceMalloc_NewReference(op);
     }
     _Py_INC_TPALLOCS(op);
     _Py_INC_REFTOTAL;
     Py_REFCNT(op) = 1;
-    op->barrier = tmp;
+    op->barrier = NULL;
 }
 
 static inline void _Py_ForgetReference(PyObject *op)

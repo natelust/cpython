@@ -19,7 +19,7 @@ PyAPI_FUNC(PyObject *) _PyInterpreterState_GetMainModule(PyInterpreterState *);
 void init_thread_marker_key(void);
 void set_thread_marker_key(void);
 
-thread_barrier get_thread_marker_key(void);
+thread_marker * get_thread_marker_key(void);
 
 void cleanup_thread_marker_key(void);
 
@@ -145,7 +145,7 @@ struct _ts {
     /* Unique thread state id. */
     uint64_t id;
     pthread_mutex_t thread_lock;
-    thread_barrier current_thread_barrier;
+    thread_marker * current_thread_marker;
 
     /* XXX signal handlers should also be here */
 

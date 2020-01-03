@@ -4,8 +4,8 @@
 extern "C" {
 #endif
 
-void try_lock(PyObject * , PyThreadState *, thread_barrier * );
-void try_unlock(PyObject *, thread_barrier * );
+void try_lock(PyObject * , PyThreadState *, thread_marker * );
+//void try_unlock(PyObject *, thread_barrier * );
 
 /* Interface to random parts in ceval.c */
 

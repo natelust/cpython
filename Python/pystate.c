@@ -66,16 +66,18 @@ void set_thread_marker_key(){
 }
 
 
-thread_barrier get_thread_marker_key(){
-    thread_barrier current_thread_barrier;
-    current_thread_barrier.thread_marker_pointer = (thread_marker *) PyThread_tss_get(&thread_marker_key);
-    return current_thread_barrier;
+//thread_barrier get_thread_marker_key(){
+thread_marker * get_thread_marker_key(){
+    //thread_barrier current_thread_barrier;
+    //current_thread_barrier.thread_marker_pointer = (thread_marker *) PyThread_tss_get(&thread_marker_key);
+    //return current_thread_barrier;
+    return (thread_marker *) PyThread_tss_get(&thread_marker_key);
 }
 
 void cleanup_thread_marker_key() {
-    thread_barrier current_thread_marker = get_thread_marker_key();
+    thread_marker * current_thread_marker = get_thread_marker_key();
     //printf("cleaning up %p\n", (void *) current_thread_marker.thread_marker_pointer);
-    free(current_thread_marker.thread_marker_pointer);
+    free(current_thread_marker);
 }
 
 static PyStatus
@@ -676,8 +678,8 @@ void
 _PyThreadState_Init(_PyRuntimeState *runtime, PyThreadState *tstate)
 {
     set_thread_marker_key();
-    thread_barrier tmp = get_thread_marker_key();
-    tstate->current_thread_barrier = tmp;
+    thread_marker * tmp = get_thread_marker_key();
+    tstate->current_thread_marker = tmp;
     _PyGILState_NoteThreadState(&runtime->gilstate, tstate);
 }
 
