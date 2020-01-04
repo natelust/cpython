@@ -44,7 +44,7 @@ extern int _PyObject_GetMethod(PyObject *, PyObject *, PyObject **);
 
 typedef PyObject *(*callproc)(PyObject *, PyObject *, PyObject *);
 
-inline void try_lock(PyObject * , PyThreadState *, thread_marker * );
+//inline void try_lock(PyObject * , PyThreadState *, thread_marker * );
 //inline void try_unlock(PyObject *, thread_barrier * );
 
 /* Forward declarations */
@@ -715,70 +715,61 @@ _Py_CheckRecursiveCall(const char *where)
     return 0;
 }
 
-#include <time.h>
-inline void try_lock(PyObject * obj, PyThreadState *tstate, thread_marker * current_thread_marker){
-    thread_marker * old_value;
-    thread_marker * new_value;
-    old_value = NULL;
-    thread_marker * pointer_for_free = NULL;
-    thread_marker * new_marker = NULL;
-    _Bool created_new = 0;
-    return;
-
-    if (obj == NULL) {
-        return;
-    }
-
-    new_value = current_thread_marker;
+//#include <time.h>
+//inline void try_lock(PyObject * obj, PyThreadState *tstate, thread_marker * current_thread_marker){
     //printf("lock %p from %p\n", (void *)obj, (void *) current_thread_marker->thread_marker_pointer);
-    //clock_t t1 = clock();
-    while (atomic_compare_exchange_weak(&(obj->barrier), &old_value, new_value) == 0){
-        //printf("in lock while\n");
-        if (old_value== current_thread_marker) {
-            //printf("have it\n");
-            break;
-        } else if (old_value== NULL) {
-            new_value= current_thread_marker;
-        } else {
-            //printf("in else in lock\n");
-            //printf("need to increment it\n");
-            //printf("the current lock pointer at 0 is %p\n", (void *) old_value.thread_marker_pointer->locks[0]);
-            pointer_for_free = NULL;
-            if (new_marker == NULL){
-                new_marker = malloc(sizeof(thread_marker));
-                created_new = 1;
-            }
-            for (unsigned int i = 0; i < old_value->wait_count; i++) {
-                new_marker->locks[i] = old_value->locks[i];
-            }
-            new_marker->wait_count = old_value->wait_count + 1;
-            new_marker->is_marker = 0;
-            new_marker->locks[new_marker->wait_count - 1] = &(tstate->thread_lock);
-
-            if (old_value->is_marker == 0) {
-                pointer_for_free = old_value;
-            }
-
-            new_value= new_marker;
-        }
-    }
-    if ( pointer_for_free != NULL) {
-        //printf("The pointer for free is %p\n", (void *) pointer_for_free);
-        free(pointer_for_free);
-    }
-    if (created_new) {
-        //printf("running pthread lock on pointer %p\n", &(tstate->thread_lock));
-        pthread_mutex_lock(&(tstate->thread_lock));
-        //printf("thread lock aquired on pointer %p\n", (void *) obj);
-        Py_BEGIN_ALLOW_THREADS
-        pthread_mutex_lock(&(tstate->thread_lock));
-        Py_END_ALLOW_THREADS
-        //printf("thread_lock_released\n");
-        pthread_mutex_unlock(&(tstate->thread_lock));
-    }
-    //clock_t t2 = clock();
-    //printf("locking took %f\n", ((double)t2-t1)/CLOCKS_PER_SEC);
-}
+#define try_lock(obj) ({\
+    thread_marker * old_value = NULL;\
+    thread_marker * new_value = current_thread_marker;\
+    thread_marker * pointer_for_free = NULL;\
+    thread_marker * new_marker = NULL;\
+    _Bool created_new = 0;\
+    _Bool go_atomic = 1;\
+\
+    if (obj == NULL) {\
+        go_atomic = 0;\
+    }\
+\
+    if (go_atomic) {\
+        printf("locking\n");\
+        while (atomic_compare_exchange_weak(&(obj->barrier), &old_value, new_value) == 0){\
+            if (old_value== current_thread_marker) {\
+                break;\
+            } else if (old_value== NULL) {\
+                new_value= current_thread_marker;\
+            } else {\
+                printf("in else\n");\
+                pointer_for_free = NULL;\
+                if (new_marker == NULL){\
+                    new_marker = malloc(sizeof(thread_marker));\
+                    created_new = 1;\
+                }\
+                for (unsigned int i = 0; i < old_value->wait_count; i++) {\
+                    new_marker->locks[i] = old_value->locks[i];\
+                }\
+                new_marker->wait_count = old_value->wait_count + 1;\
+                new_marker->is_marker = 0;\
+                new_marker->locks[new_marker->wait_count - 1] = &(tstate->thread_lock);\
+\
+                if (old_value->is_marker == 0) {\
+                    pointer_for_free = old_value;\
+                }\
+\
+                new_value= new_marker;\
+            }\
+        }\
+        if ( pointer_for_free != NULL) {\
+            free(pointer_for_free);\
+        }\
+        if (created_new) {\
+            pthread_mutex_lock(&(tstate->thread_lock));\
+            Py_BEGIN_ALLOW_THREADS\
+            pthread_mutex_lock(&(tstate->thread_lock));\
+            Py_END_ALLOW_THREADS\
+            pthread_mutex_unlock(&(tstate->thread_lock));\
+        }\
+    }\
+});
 
     // This will be removed when all the op codes are handled\
     //if (obj->barrier.thread_marker_pointer == NULL) {\
@@ -794,7 +785,7 @@ inline void try_lock(PyObject * obj, PyThreadState *tstate, thread_marker * curr
     //old_value.thread_marker_pointer = current_thread_marker->thread_marker_pointer;\
     //old_value = NULL;\
 
-#define try_unlock(obj, current_thread_marker) ({\
+#define try_unlock(obj) ({\
     thread_marker * old_value;\
     old_value = current_thread_marker;\
     thread_marker * thread_marker_holder = NULL;\
@@ -804,8 +795,36 @@ inline void try_lock(PyObject * obj, PyThreadState *tstate, thread_marker * curr
     if (obj == NULL){\
         go_atomic = 0;\
     }\
-\
+    \
     if (go_atomic){\
+        printf("unlocking\n");\
+        thread_marker_holder = atomic_exchange_explicit(&(obj->barrier), new_thread_marker, memory_order_relaxed);\
+        if (thread_marker_holder == NULL) {\
+            printf("- null\n");\
+        }\
+        if (thread_marker_holder != NULL && thread_marker_holder != current_thread_marker) {\
+            if (thread_marker_holder->wait_count >= 1) {\
+                if (new_thread_marker == NULL) {\
+                    new_thread_marker = malloc(sizeof(thread_marker));  \
+                }\
+                new_thread_marker->wait_count = thread_marker_holder->wait_count -1;\
+                new_thread_marker->is_marker = 0;\
+                for (unsigned int i = 1; i < thread_marker_holder->wait_count; i++){\
+                    new_thread_marker->locks[i-1] = thread_marker_holder->locks[i];\
+                }\
+                atomic_exchange(&(obj->barrier), new_thread_marker);\
+                if (thread_marker_holder->is_marker == 0) {\
+                    if (thread_marker_holder->locks[0] != NULL &&  thread_marker_holder->wait_count != 0) {\
+                        pthread_mutex_unlock(thread_marker_holder->locks[0]);\
+                    }\
+                    free(thread_marker_holder);\
+                }\
+            } \
+        }\
+    }\
+});
+
+/*
     while (atomic_compare_exchange_weak(&(obj->barrier), &old_value, new_thread_marker)==0){\
         thread_marker_holder = old_value;\
         if (thread_marker_holder == NULL){\
@@ -834,6 +853,7 @@ inline void try_lock(PyObject * obj, PyThreadState *tstate, thread_marker * curr
     }\
     }\
 })
+*/
 
 static int do_raise(PyThreadState *tstate, PyObject *exc, PyObject *cause);
 static int unpack_iterable(PyThreadState *, PyObject *, int, int, PyObject **);
@@ -1476,7 +1496,8 @@ main_loop:
                 goto error;
             }
             Py_INCREF(value);
-            //try_lock(value, tstate, current_thread_marker);
+            try_lock(value);
+            printf(":load_fast\n");
             PUSH(value);
             FAST_DISPATCH();
         }
@@ -1492,14 +1513,17 @@ main_loop:
         case TARGET(STORE_FAST): {
             PREDICTED(STORE_FAST);
             PyObject *value = POP();
-            try_unlock(value, current_thread_marker);
+            try_unlock(value);
+            printf(":store-fast-value\n");
             SETLOCAL(oparg, value);
             FAST_DISPATCH();
         }
 
         case TARGET(POP_TOP): {
+            printf("poping top\n");
             PyObject *value = POP();
-            try_unlock(value, current_thread_marker);
+            try_unlock(value);
+            printf(":pop_top\n");
             Py_DECREF(value);
             FAST_DISPATCH();
         }
@@ -1555,8 +1579,8 @@ main_loop:
         case TARGET(UNARY_POSITIVE): {
             PyObject *value = TOP();
             PyObject *res = PyNumber_Positive(value);
+            try_unlock(value);
             Py_DECREF(value);
-            //try_lock(res, tstate, current_thread_marker);
             SET_TOP(res);
             if (res == NULL)
                 goto error;
@@ -1566,8 +1590,8 @@ main_loop:
         case TARGET(UNARY_NEGATIVE): {
             PyObject *value = TOP();
             PyObject *res = PyNumber_Negative(value);
+            try_unlock(value);
             Py_DECREF(value);
-            //try_lock(res, tstate, current_thread_marker);
             SET_TOP(res);
             if (res == NULL)
                 goto error;
@@ -1595,8 +1619,8 @@ main_loop:
         case TARGET(UNARY_INVERT): {
             PyObject *value = TOP();
             PyObject *res = PyNumber_Invert(value);
-            try_unlock(value, current_thread_marker);
-            //try_lock(res, tstate, current_thread_marker);
+            try_unlock(value);
+            try_lock(res);
             Py_DECREF(value);
             SET_TOP(res);
             if (res == NULL)
@@ -1608,9 +1632,9 @@ main_loop:
             PyObject *exp = POP();
             PyObject *base = TOP();
             PyObject *res = PyNumber_Power(base, exp, Py_None);
-            try_unlock(exp, current_thread_marker);
-            try_unlock(base, current_thread_marker);
-            try_lock(res, tstate, current_thread_marker);
+            try_unlock(exp);
+            try_unlock(base);
+            try_lock(res);
             Py_DECREF(base);
             Py_DECREF(exp);
             SET_TOP(res);
@@ -1623,9 +1647,9 @@ main_loop:
             PyObject *right = POP();
             PyObject *left = TOP();
             PyObject *res = PyNumber_Multiply(left, right);
-            try_unlock(right, current_thread_marker);
-            try_unlock(left, current_thread_marker);
-            //try_lock(res, tstate, current_thread_marker);
+            try_unlock(right);
+            try_unlock(left);
+            try_lock(res);
             Py_DECREF(left);
             Py_DECREF(right);
             SET_TOP(res);
@@ -1682,6 +1706,8 @@ main_loop:
             } else {
               res = PyNumber_Remainder(dividend, divisor);
             }
+            try_unlock(divisor);
+            try_unlock(dividend);
             Py_DECREF(divisor);
             Py_DECREF(dividend);
             SET_TOP(res);
@@ -1709,6 +1735,8 @@ main_loop:
                 sum = PyNumber_Add(left, right);
                 Py_DECREF(left);
             }
+            try_unlock(right);
+            try_unlock(left);
             Py_DECREF(right);
             SET_TOP(sum);
             if (sum == NULL)
@@ -1805,6 +1833,7 @@ main_loop:
             PyObject *list = PEEK(oparg);
             int err;
             err = PyList_Append(list, v);
+            try_unlock(v);
             Py_DECREF(v);
             if (err != 0)
                 goto error;
@@ -1817,6 +1846,7 @@ main_loop:
             PyObject *set = PEEK(oparg);
             int err;
             err = PySet_Add(set, v);
+            try_unlock(v);
             Py_DECREF(v);
             if (err != 0)
                 goto error;
@@ -1828,6 +1858,8 @@ main_loop:
             PyObject *exp = POP();
             PyObject *base = TOP();
             PyObject *res = PyNumber_InPlacePower(base, exp, Py_None);
+            try_unlock(base);
+            try_unlock(exp);
             Py_DECREF(base);
             Py_DECREF(exp);
             SET_TOP(res);
@@ -1995,9 +2027,9 @@ main_loop:
             STACK_SHRINK(3);
             /* container[sub] = v */
             err = PyObject_SetItem(container, sub, v);
-            try_unlock(sub, current_thread_marker);
-            try_unlock(container, current_thread_marker);
-            try_unlock(v, current_thread_marker);
+            try_unlock(sub);
+            try_unlock(container);
+            try_unlock(v);
             Py_DECREF(v);
             Py_DECREF(container);
             Py_DECREF(sub);
@@ -2013,8 +2045,8 @@ main_loop:
             STACK_SHRINK(2);
             /* del container[sub] */
             err = PyObject_DelItem(container, sub);
-            try_unlock(sub, current_thread_marker);
-            try_unlock(sub, current_thread_marker);
+            try_unlock(sub);
+            try_unlock(sub);
             Py_DECREF(container);
             Py_DECREF(sub);
             if (err != 0)
@@ -2026,14 +2058,22 @@ main_loop:
             _Py_IDENTIFIER(displayhook);
             PyObject *value = POP();
             PyObject *hook = _PySys_GetObjectId(&PyId_displayhook);
+            try_lock(hook);
+            printf(": print-expr-hook\n");
             PyObject *res;
             if (hook == NULL) {
                 _PyErr_SetString(tstate, PyExc_RuntimeError,
                                  "lost sys.displayhook");
+                try_unlock(value);
+                printf(": print-expr-value\n");
                 Py_DECREF(value);
                 goto error;
             }
             res = PyObject_CallFunctionObjArgs(hook, value, NULL);
+            try_unlock(hook);
+            printf(": print-expr-hook\n");
+            try_unlock(value);
+            printf(": print-expr-value\n");
             Py_DECREF(value);
             if (res == NULL)
                 goto error;
@@ -2436,11 +2476,15 @@ main_loop:
             PyObject *name = GETITEM(names, oparg);
             PyObject *v = POP();
             PyObject *ns = f->f_locals;
-            //try_lock(ns, tstate, current_thread_marker);
+            try_lock(ns);
+            printf(": store-name-ns\n");
             int err;
             if (ns == NULL) {
                 _PyErr_Format(tstate, PyExc_SystemError,
                               "no locals found when storing %R", name);
+                printf("! ns is null, not unlocking\n");
+                try_unlock(v);
+                printf(": store-name-v\n");
                 Py_DECREF(v);
                 goto error;
             }
@@ -2448,10 +2492,11 @@ main_loop:
                 err = PyDict_SetItem(ns, name, v);
             else
                 err = PyObject_SetItem(ns, name, v);
-            try_unlock(name, current_thread_marker);
-            try_unlock(v, current_thread_marker);
+            try_unlock(v);
+            printf(": store-name-v\n");
             // Might need to try locking name space somehow
-            try_unlock(ns, current_thread_marker);
+            try_unlock(ns);
+            printf(": store-name-ns\n");
             Py_DECREF(v);
             if (err != 0)
                 goto error;
@@ -2501,11 +2546,11 @@ main_loop:
                 STACK_GROW(oparg);
             } else {
                 /* unpack_iterable() raised an exception */
-                try_unlock(seq, current_thread_marker);
+                try_unlock(seq);
                 Py_DECREF(seq);
                 goto error;
             }
-            try_unlock(seq, current_thread_marker);
+            try_unlock(seq);
             Py_DECREF(seq);
             DISPATCH();
         }
@@ -2518,11 +2563,11 @@ main_loop:
                                 stack_pointer + totalargs)) {
                 stack_pointer += totalargs;
             } else {
-                try_unlock(seq, current_thread_marker);
+                try_unlock(seq);
                 Py_DECREF(seq);
                 goto error;
             }
-            try_unlock(seq, current_thread_marker);
+            try_unlock(seq);
             Py_DECREF(seq);
             DISPATCH();
         }
@@ -2534,9 +2579,9 @@ main_loop:
             int err;
             STACK_SHRINK(2);
             err = PyObject_SetAttr(owner, name, v);
-            try_unlock(name, current_thread_marker);
-            try_unlock(owner, current_thread_marker);
-            try_unlock(v, current_thread_marker);
+            try_unlock(name);
+            try_unlock(owner);
+            try_unlock(v);
             Py_DECREF(v);
             Py_DECREF(owner);
             if (err != 0)
@@ -2560,7 +2605,7 @@ main_loop:
             PyObject *v = POP();
             int err;
             err = PyDict_SetItem(f->f_globals, name, v);
-            try_unlock(v, current_thread_marker);
+            try_unlock(v);
             Py_DECREF(v);
             if (err != 0)
                 goto error;
@@ -2590,47 +2635,60 @@ main_loop:
                               "no locals when loading %R", name);
                 goto error;
             }
-            //try_lock(locals, tstate, current_thread_marker);
+            try_lock(locals);
+            printf(": load-name-locals\n");
             if (PyDict_CheckExact(locals)) {
                 v = PyDict_GetItemWithError(locals, name);
                 if (v != NULL) {
-                    //try_lock(v, tstate, current_thread_marker);
-                    try_unlock(locals, current_thread_marker);
+                    try_lock(v);
+                    printf(": load-name-v\n");
+                    try_unlock(locals);
+                    printf(": load-name-locals\n");
                     Py_INCREF(v);
                 }
                 else if (_PyErr_Occurred(tstate)) {
-                    try_unlock(locals, current_thread_marker);
+                    try_unlock(locals);
+                    printf(": load-name-locals\n");
                     goto error;
                 }
             }
             else {
                 v = PyObject_GetItem(locals, name);
-                try_unlock(locals, current_thread_marker);
+                try_unlock(locals);
+                printf(": load-name-locals\n");
                 if (v == NULL) {
                     if (!_PyErr_ExceptionMatches(tstate, PyExc_KeyError))
                         goto error;
                     _PyErr_Clear(tstate);
                 }
-                //try_lock(v, tstate, current_thread_marker);
+                try_lock(v);
+                printf(": load-name-v\n");
             }
             if (v == NULL) {
-                //try_lock(f->f_globals, tstate, current_thread_marker);
+                try_lock(f->f_globals);
+                printf(": load-name-globals\n");
                 v = PyDict_GetItemWithError(f->f_globals, name);
                 if (v != NULL) {
-                    //try_lock(v, tstate, current_thread_marker);
-                    try_unlock(f->f_globals, current_thread_marker);
+                    try_lock(v);
+                    printf(": load-name-v\n");
+                    try_unlock(f->f_globals);
+                    printf(": load-name-globals\n");
                     Py_INCREF(v);
                 }
                 else if (_PyErr_Occurred(tstate)) {
-                    try_unlock(f->f_globals, current_thread_marker);
+                    try_unlock(f->f_globals);
+                    printf(": load-name-globals\n");
                     goto error;
                 }
                 else {
-                    try_unlock(f->f_globals, current_thread_marker);
-                    //try_lock(f->f_builtins, tstate, current_thread_marker);
+                    try_unlock(f->f_globals);
+                    printf(": load-name-globals\n");
+                    try_lock(f->f_builtins);
+                    printf(": load-name-builtins\n");
                     if (PyDict_CheckExact(f->f_builtins)) {
                         v = PyDict_GetItemWithError(f->f_builtins, name);
-                        try_unlock(f->f_builtins, current_thread_marker);
+                        try_unlock(f->f_builtins);
+                        printf(": load-name-builtins\n");
                         if (v == NULL) {
                             if (!_PyErr_Occurred(tstate)) {
                                 format_exc_check_arg(
@@ -2639,12 +2697,14 @@ main_loop:
                             }
                             goto error;
                         }
-                        //try_lock(v, tstate, current_thread_marker);
+                        try_lock(v);
+                        printf(": load-name-v\n");
                         Py_INCREF(v);
                     }
                     else {
                         v = PyObject_GetItem(f->f_builtins, name);
-                        try_unlock(f->f_builtins, current_thread_marker);
+                        try_unlock(f->f_builtins);
+                        printf(": load-name-builtins\n");
                         if (v == NULL) {
                             if (_PyErr_ExceptionMatches(tstate, PyExc_KeyError)) {
                                 format_exc_check_arg(
@@ -2653,10 +2713,11 @@ main_loop:
                             }
                             goto error;
                         }
+                        try_lock(v);
+                        printf(": load-name-v\n");
                     }
                 }
             }
-            //try_lock(v, tstate, current_thread_marker);
             PUSH(v);
             DISPATCH();
         }
@@ -2836,9 +2897,9 @@ main_loop:
             PyObject *cell = freevars[oparg];
             PyObject *oldobj = PyCell_GET(cell);
             PyCell_SET(cell, v);
-            try_unlock(v, current_thread_marker);
-            try_unlock(cell, current_thread_marker);
-            try_unlock(oldobj, current_thread_marker);
+            try_unlock(v);
+            try_unlock(cell);
+            try_unlock(oldobj);
             Py_XDECREF(oldobj);
             DISPATCH();
         }
@@ -2855,7 +2916,7 @@ main_loop:
                 goto error;
             while (--oparg >= 0) {
                 PyObject *item = POP();
-                try_unlock(item, current_thread_marker);
+                try_unlock(item);
                 Py_DECREF(item);
             }
             PUSH(str);
@@ -2869,9 +2930,9 @@ main_loop:
             while (--oparg >= 0) {
                 PyObject *item = POP();
                 PyTuple_SET_ITEM(tup, oparg, item);
-                try_unlock(item, current_thread_marker);
+                try_unlock(item);
             }
-            //try_lock(tup, tstate, current_thread_marker);
+            try_lock(tup);
             PUSH(tup);
             DISPATCH();
         }
@@ -2883,9 +2944,9 @@ main_loop:
             while (--oparg >= 0) {
                 PyObject *item = POP();
                 PyList_SET_ITEM(list, oparg, item);
-                try_unlock(item, current_thread_marker);
+                try_unlock(item);
             }
-            //try_lock(list, tstate, current_thread_marker);
+            try_lock(list);
             PUSH(list);
             DISPATCH();
         }
@@ -2929,7 +2990,7 @@ main_loop:
 
             while (oparg--)
                 Py_DECREF(POP());
-            //try_lock(return_value, tstate, current_thread_marker);
+            try_lock(return_value);
             PUSH(return_value);
             DISPATCH();
         }
@@ -2944,6 +3005,7 @@ main_loop:
                 PyObject *item = PEEK(i);
                 if (err == 0)
                     err = PySet_Add(set, item);
+                try_unlock(item);
                 Py_DECREF(item);
             }
             STACK_SHRINK(oparg);
@@ -2968,8 +3030,11 @@ main_loop:
                 }
             }
 
+            PyObject *v;
             while (oparg--)
-                Py_DECREF(POP());
+                v = POP();
+                try_unlock(v);
+                Py_DECREF(v);
             PUSH(sum);
             DISPATCH();
         }
@@ -2991,8 +3056,12 @@ main_loop:
             }
 
             while (oparg--) {
-                Py_DECREF(POP());
-                Py_DECREF(POP());
+                PyObject * v1 = POP();
+                PyObject * v2 = POP();
+                try_unlock(v1);
+                try_unlock(v2);
+                Py_DECREF(v1);
+                Py_DECREF(v2);
             }
             PUSH(map);
             DISPATCH();
@@ -3081,10 +3150,13 @@ main_loop:
                     goto error;
                 }
             }
-
-            Py_DECREF(POP());
+            PyObject * v = POP();
+            try_unlock(v);
+            Py_DECREF(v);
             while (oparg--) {
-                Py_DECREF(POP());
+                v = POP();
+                try_unlock(v);
+                Py_DECREF(v);
             }
             PUSH(map);
             DISPATCH();
@@ -3109,8 +3181,11 @@ main_loop:
                 }
             }
 
+            PyObject *v;
             while (oparg--)
-                Py_DECREF(POP());
+                v = POP();
+                try_unlock(v);
+                Py_DECREF(v);
             PUSH(sum);
             DISPATCH();
         }
@@ -3130,8 +3205,11 @@ main_loop:
                 }
             }
 
+            PyObject * v;
             while (oparg--)
-                Py_DECREF(POP());
+                v = POP();
+                try_unlock(v);
+                Py_DECREF(v);
             PUSH(sum);
             DISPATCH();
         }
@@ -3145,6 +3223,9 @@ main_loop:
             map = PEEK(oparg);                      /* dict */
             assert(PyDict_CheckExact(map));
             err = PyDict_SetItem(map, key, value);  /* map[key] = value */
+            try_unlock(map);
+            try_unlock(value);
+            try_unlock(key);
             Py_DECREF(value);
             Py_DECREF(key);
             if (err != 0)
@@ -3157,7 +3238,9 @@ main_loop:
             PyObject *name = GETITEM(names, oparg);
             PyObject *owner = TOP();
             PyObject *res = PyObject_GetAttr(owner, name);
+            try_unlock(owner);
             Py_DECREF(owner);
+            try_lock(res);
             SET_TOP(res);
             if (res == NULL)
                 goto error;
@@ -3168,6 +3251,8 @@ main_loop:
             PyObject *right = POP();
             PyObject *left = TOP();
             PyObject *res = cmp_outcome(tstate, oparg, left, right);
+            try_unlock(left);
+            try_unlock(right);
             Py_DECREF(left);
             Py_DECREF(right);
             SET_TOP(res);
@@ -3184,6 +3269,8 @@ main_loop:
             PyObject *level = TOP();
             PyObject *res;
             res = import_name(tstate, f, name, fromlist, level);
+            try_unlock(level);
+            try_unlock(fromlist);
             Py_DECREF(level);
             Py_DECREF(fromlist);
             SET_TOP(res);
@@ -3207,8 +3294,11 @@ main_loop:
                 Py_DECREF(from);
                 goto error;
             }
+            try_lock(locals);
             err = import_all_from(tstate, locals, from);
             PyFrame_LocalsToFast(f, 0);
+            try_unlock(locals);
+            try_unlock(from);
             Py_DECREF(from);
             if (err != 0)
                 goto error;
@@ -3220,6 +3310,7 @@ main_loop:
             PyObject *from = TOP();
             PyObject *res;
             res = import_from(tstate, from, name);
+            try_unlock(from);
             PUSH(res);
             if (res == NULL)
                 goto error;
@@ -3236,15 +3327,18 @@ main_loop:
             PyObject *cond = POP();
             int err;
             if (cond == Py_True) {
+                try_unlock(cond);
                 Py_DECREF(cond);
                 FAST_DISPATCH();
             }
             if (cond == Py_False) {
+                try_unlock(cond);
                 Py_DECREF(cond);
                 JUMPTO(oparg);
                 FAST_DISPATCH();
             }
             err = PyObject_IsTrue(cond);
+            try_unlock(cond);
             Py_DECREF(cond);
             if (err > 0)
                 ;
@@ -3260,15 +3354,18 @@ main_loop:
             PyObject *cond = POP();
             int err;
             if (cond == Py_False) {
+                try_unlock(cond);
                 Py_DECREF(cond);
                 FAST_DISPATCH();
             }
             if (cond == Py_True) {
+                try_unlock(cond);
                 Py_DECREF(cond);
                 JUMPTO(oparg);
                 FAST_DISPATCH();
             }
             err = PyObject_IsTrue(cond);
+            try_unlock(cond);
             Py_DECREF(cond);
             if (err > 0) {
                 JUMPTO(oparg);
@@ -3285,6 +3382,7 @@ main_loop:
             int err;
             if (cond == Py_True) {
                 STACK_SHRINK(1);
+                try_unlock(cond);
                 Py_DECREF(cond);
                 FAST_DISPATCH();
             }
@@ -3295,6 +3393,7 @@ main_loop:
             err = PyObject_IsTrue(cond);
             if (err > 0) {
                 STACK_SHRINK(1);
+                try_unlock(cond);
                 Py_DECREF(cond);
             }
             else if (err == 0)
@@ -3309,6 +3408,7 @@ main_loop:
             int err;
             if (cond == Py_False) {
                 STACK_SHRINK(1);
+                try_unlock(cond);
                 Py_DECREF(cond);
                 FAST_DISPATCH();
             }
@@ -3322,6 +3422,7 @@ main_loop:
             }
             else if (err == 0) {
                 STACK_SHRINK(1);
+                try_unlock(cond);
                 Py_DECREF(cond);
             }
             else
@@ -3350,7 +3451,11 @@ main_loop:
             /* before: [obj]; after [getiter(obj)] */
             PyObject *iterable = TOP();
             PyObject *iter = PyObject_GetIter(iterable);
+            try_unlock(iterable);
+            printf(":iterable\n");
             Py_DECREF(iterable);
+            try_lock(iter);
+            printf(":iter\n");
             SET_TOP(iter);
             if (iter == NULL)
                 goto error;
@@ -3368,6 +3473,7 @@ main_loop:
                 if (!(co->co_flags & (CO_COROUTINE | CO_ITERABLE_COROUTINE))) {
                     /* and it is used in a 'yield from' expression of a
                        regular generator. */
+                    try_unlock(iterable);
                     Py_DECREF(iterable);
                     SET_TOP(NULL);
                     _PyErr_SetString(tstate, PyExc_TypeError,
@@ -3379,6 +3485,7 @@ main_loop:
             else if (!PyGen_CheckExact(iterable)) {
                 /* `iterable` is not a generator. */
                 iter = PyObject_GetIter(iterable);
+                try_unlock(iterable);
                 Py_DECREF(iterable);
                 SET_TOP(iter);
                 if (iter == NULL)
@@ -3394,12 +3501,15 @@ main_loop:
             PyObject *iter = TOP();
             PyObject *next = (*iter->ob_type->tp_iternext)(iter);
             if (next != NULL) {
+                try_lock(next);
+                printf(":next\n");
                 PUSH(next);
                 PREDICT(STORE_FAST);
                 PREDICT(UNPACK_SEQUENCE);
                 DISPATCH();
             }
             if (_PyErr_Occurred(tstate)) {
+                try_unlock(iter);
                 if (!_PyErr_ExceptionMatches(tstate, PyExc_StopIteration)) {
                     goto error;
                 }
@@ -3410,6 +3520,8 @@ main_loop:
             }
             /* iterator ended normally */
             STACK_SHRINK(1);
+            try_unlock(iter);
+            printf(":iter\n");
             Py_DECREF(iter);
             JUMPBY(oparg);
             PREDICT(POP_BLOCK);
@@ -3468,14 +3580,17 @@ main_loop:
             PyObject *enter = special_lookup(tstate, mgr, &PyId___enter__);
             PyObject *res;
             if (enter == NULL) {
+                try_unlock(mgr);
                 goto error;
             }
             PyObject *exit = special_lookup(tstate, mgr, &PyId___exit__);
             if (exit == NULL) {
+                try_unlock(mgr);
                 Py_DECREF(enter);
                 goto error;
             }
             SET_TOP(exit);
+            try_unlock(mgr);
             Py_DECREF(mgr);
             res = _PyObject_CallNoArg(enter);
             Py_DECREF(enter);
@@ -3708,6 +3823,7 @@ main_loop:
             res = call_function(tstate, &sp, oparg, names);
             stack_pointer = sp;
             PUSH(res);
+            try_unlock(names);
             Py_DECREF(names);
 
             if (res == NULL) {
@@ -3727,9 +3843,11 @@ main_loop:
                     if (_PyDict_MergeEx(d, kwargs, 2) < 0) {
                         Py_DECREF(d);
                         format_kwargs_error(tstate, SECOND(), kwargs);
+                        try_unlock(kwargs);
                         Py_DECREF(kwargs);
                         goto error;
                     }
+                    try_unlock(kwargs);
                     Py_DECREF(kwargs);
                     kwargs = d;
                 }
@@ -3739,6 +3857,7 @@ main_loop:
             func = TOP();
             if (!PyTuple_CheckExact(callargs)) {
                 if (check_args_iterable(tstate, func, callargs) < 0) {
+                    try_unlock(callargs);
                     Py_DECREF(callargs);
                     goto error;
                 }
@@ -3750,6 +3869,9 @@ main_loop:
             assert(PyTuple_CheckExact(callargs));
 
             result = do_call_core(tstate, func, callargs, kwargs);
+            try_unlock(func);
+            try_unlock(callargs);
+            try_unlock(kwargs);
             Py_DECREF(func);
             Py_DECREF(callargs);
             Py_XDECREF(kwargs);
@@ -3767,6 +3889,8 @@ main_loop:
             PyFunctionObject *func = (PyFunctionObject *)
                 PyFunction_NewWithQualName(codeobj, f->f_globals, qualname);
 
+            try_unlock(codeobj);
+            try_unlock(qualname);
             Py_DECREF(codeobj);
             Py_DECREF(qualname);
             if (func == NULL) {
@@ -3776,18 +3900,22 @@ main_loop:
             if (oparg & 0x08) {
                 assert(PyTuple_CheckExact(TOP()));
                 func ->func_closure = POP();
+                try_unlock(func->func_closure);
             }
             if (oparg & 0x04) {
                 assert(PyDict_CheckExact(TOP()));
                 func->func_annotations = POP();
+                try_unlock(func->func_annotations);
             }
             if (oparg & 0x02) {
                 assert(PyDict_CheckExact(TOP()));
                 func->func_kwdefaults = POP();
+                try_unlock(func->func_kwdefaults);
             }
             if (oparg & 0x01) {
                 assert(PyTuple_CheckExact(TOP()));
                 func->func_defaults = POP();
+                try_unlock(func->func_defaults);
             }
 
             PUSH((PyObject *)func);
@@ -3803,6 +3931,9 @@ main_loop:
             stop = POP();
             start = TOP();
             slice = PySlice_New(start, stop, step);
+            try_unlock(start);
+            try_unlock(stop);
+            try_unlock(step);
             Py_DECREF(start);
             Py_DECREF(stop);
             Py_XDECREF(step);
@@ -3842,6 +3973,7 @@ main_loop:
                without conversion. */
             if (conv_fn != NULL) {
                 result = conv_fn(value);
+                try_unlock(value);
                 Py_DECREF(value);
                 if (result == NULL) {
                     Py_XDECREF(fmt_spec);
@@ -3861,6 +3993,8 @@ main_loop:
             } else {
                 /* Actually call format(). */
                 result = PyObject_Format(value, fmt_spec);
+                try_unlock(value);
+                try_unlock(fmt_spec);
                 Py_DECREF(value);
                 Py_XDECREF(fmt_spec);
                 if (result == NULL) {
@@ -3980,6 +4114,7 @@ exit_returning:
     /* Pop remaining stack entries. */
     while (!EMPTY()) {
         PyObject *o = POP();
+        try_unlock(o);
         Py_XDECREF(o);
     }
 
@@ -4007,6 +4142,7 @@ exit_eval_frame:
     f->f_executing = 0;
     tstate->frame = f->f_back;
 
+    try_unlock(retval);
     return _Py_CheckFunctionResult(NULL, retval, "PyEval_EvalFrameEx");
 }
 
@@ -5172,6 +5308,7 @@ call_function(PyThreadState *tstate, PyObject ***pp_stack, Py_ssize_t oparg, PyO
     Py_ssize_t nkwargs = (kwnames == NULL) ? 0 : PyTuple_GET_SIZE(kwnames);
     Py_ssize_t nargs = oparg - nkwargs;
     PyObject **stack = (*pp_stack) - nargs - nkwargs;
+    thread_marker * current_thread_marker = tstate->current_thread_marker;
 
     if (tstate->use_tracing) {
         x = trace_call_function(tstate, func, stack, nargs, kwnames);
@@ -5185,6 +5322,7 @@ call_function(PyThreadState *tstate, PyObject ***pp_stack, Py_ssize_t oparg, PyO
     /* Clear the stack of the function object. */
     while ((*pp_stack) > pfunc) {
         w = EXT_POP(*pp_stack);
+        try_unlock(w);
         Py_DECREF(w);
     }
 
