@@ -731,14 +731,12 @@ _Py_CheckRecursiveCall(const char *where)
     }\
 \
     if (go_atomic) {\
-        printf("locking\n");\
-        while (atomic_compare_exchange_weak(&(obj->barrier), &old_value, new_value) == 0){\
+        while (atomic_compare_exchange_weak_explicit(&(obj->barrier), &old_value, new_value, memory_order_relaxed, memory_order_relaxed) == 0){\
             if (old_value== current_thread_marker) {\
                 break;\
             } else if (old_value== NULL) {\
                 new_value= current_thread_marker;\
             } else {\
-                printf("in else\n");\
                 pointer_for_free = NULL;\
                 if (new_marker == NULL){\
                     new_marker = malloc(sizeof(thread_marker));\
@@ -784,6 +782,7 @@ _Py_CheckRecursiveCall(const char *where)
 //inline void try_unlock(PyObject * obj, thread_barrier * current_thread_marker) {
     //old_value.thread_marker_pointer = current_thread_marker->thread_marker_pointer;\
     //old_value = NULL;\
+        //thread_marker_holder = atomic_exchange_explicit(&(obj->barrier), new_thread_marker, memory_order_release);\
 
 #define try_unlock(obj) ({\
     thread_marker * old_value;\
@@ -797,29 +796,27 @@ _Py_CheckRecursiveCall(const char *where)
     }\
     \
     if (go_atomic){\
-        printf("unlocking\n");\
-        thread_marker_holder = atomic_exchange_explicit(&(obj->barrier), new_thread_marker, memory_order_relaxed);\
-        if (thread_marker_holder == NULL) {\
-            printf("- null\n");\
-        }\
-        if (thread_marker_holder != NULL && thread_marker_holder != current_thread_marker) {\
-            if (thread_marker_holder->wait_count >= 1) {\
-                if (new_thread_marker == NULL) {\
-                    new_thread_marker = malloc(sizeof(thread_marker));  \
-                }\
-                new_thread_marker->wait_count = thread_marker_holder->wait_count -1;\
-                new_thread_marker->is_marker = 0;\
-                for (unsigned int i = 1; i < thread_marker_holder->wait_count; i++){\
-                    new_thread_marker->locks[i-1] = thread_marker_holder->locks[i];\
-                }\
-                atomic_exchange(&(obj->barrier), new_thread_marker);\
-                if (thread_marker_holder->is_marker == 0) {\
-                    if (thread_marker_holder->locks[0] != NULL &&  thread_marker_holder->wait_count != 0) {\
-                        pthread_mutex_unlock(thread_marker_holder->locks[0]);\
+        while(atomic_compare_exchange_weak_explicit(&(obj->barrier), &old_value, new_thread_marker, memory_order_relaxed, memory_order_relaxed)==0){\
+            thread_marker_holder = old_value;\
+            if (thread_marker_holder != NULL && thread_marker_holder != current_thread_marker) {\
+                printf("should not be here");\
+                if (thread_marker_holder->wait_count >= 1) {\
+                    if (new_thread_marker == NULL) {\
+                        new_thread_marker = malloc(sizeof(thread_marker));  \
                     }\
-                    free(thread_marker_holder);\
-                }\
-            } \
+                    new_thread_marker->wait_count = thread_marker_holder->wait_count -1;\
+                    new_thread_marker->is_marker = 0;\
+                    for (unsigned int i = 1; i < thread_marker_holder->wait_count; i++){\
+                        new_thread_marker->locks[i-1] = thread_marker_holder->locks[i];\
+                    }\
+                } \
+            }\
+        }\
+        if (thread_marker_holder != NULL && thread_marker_holder->is_marker == 0) {\
+            if (thread_marker_holder->locks[0] != NULL &&  thread_marker_holder->wait_count != 0) {\
+                pthread_mutex_unlock(thread_marker_holder->locks[0]);\
+            }\
+            free(thread_marker_holder);\
         }\
     }\
 });
@@ -1497,7 +1494,7 @@ main_loop:
             }
             Py_INCREF(value);
             try_lock(value);
-            printf(":load_fast\n");
+            //printf(":load_fast\n");
             PUSH(value);
             FAST_DISPATCH();
         }
@@ -1514,16 +1511,16 @@ main_loop:
             PREDICTED(STORE_FAST);
             PyObject *value = POP();
             try_unlock(value);
-            printf(":store-fast-value\n");
+            //printf(":store-fast-value\n");
             SETLOCAL(oparg, value);
             FAST_DISPATCH();
         }
 
         case TARGET(POP_TOP): {
-            printf("poping top\n");
+            //printf("poping top\n");
             PyObject *value = POP();
             try_unlock(value);
-            printf(":pop_top\n");
+            //printf(":pop_top\n");
             Py_DECREF(value);
             FAST_DISPATCH();
         }
@@ -2059,21 +2056,21 @@ main_loop:
             PyObject *value = POP();
             PyObject *hook = _PySys_GetObjectId(&PyId_displayhook);
             try_lock(hook);
-            printf(": print-expr-hook\n");
+            //printf(": print-expr-hook\n");
             PyObject *res;
             if (hook == NULL) {
                 _PyErr_SetString(tstate, PyExc_RuntimeError,
                                  "lost sys.displayhook");
                 try_unlock(value);
-                printf(": print-expr-value\n");
+                //printf(": print-expr-value\n");
                 Py_DECREF(value);
                 goto error;
             }
             res = PyObject_CallFunctionObjArgs(hook, value, NULL);
             try_unlock(hook);
-            printf(": print-expr-hook\n");
+            //printf(": print-expr-hook\n");
             try_unlock(value);
-            printf(": print-expr-value\n");
+            //printf(": print-expr-value\n");
             Py_DECREF(value);
             if (res == NULL)
                 goto error;
@@ -2476,15 +2473,13 @@ main_loop:
             PyObject *name = GETITEM(names, oparg);
             PyObject *v = POP();
             PyObject *ns = f->f_locals;
-            try_lock(ns);
-            printf(": store-name-ns\n");
             int err;
             if (ns == NULL) {
                 _PyErr_Format(tstate, PyExc_SystemError,
                               "no locals found when storing %R", name);
-                printf("! ns is null, not unlocking\n");
+                //printf("! ns is null, not unlocking\n");
                 try_unlock(v);
-                printf(": store-name-v\n");
+                //printf(": store-name-v\n");
                 Py_DECREF(v);
                 goto error;
             }
@@ -2493,10 +2488,8 @@ main_loop:
             else
                 err = PyObject_SetItem(ns, name, v);
             try_unlock(v);
-            printf(": store-name-v\n");
+            //printf(": store-name-v\n");
             // Might need to try locking name space somehow
-            try_unlock(ns);
-            printf(": store-name-ns\n");
             Py_DECREF(v);
             if (err != 0)
                 goto error;
@@ -2635,60 +2628,55 @@ main_loop:
                               "no locals when loading %R", name);
                 goto error;
             }
-            try_lock(locals);
-            printf(": load-name-locals\n");
             if (PyDict_CheckExact(locals)) {
                 v = PyDict_GetItemWithError(locals, name);
                 if (v != NULL) {
                     try_lock(v);
-                    printf(": load-name-v\n");
-                    try_unlock(locals);
-                    printf(": load-name-locals\n");
+                    //printf(": load-name-v\n");
+                    //printf(": load-name-locals\n");
                     Py_INCREF(v);
                 }
                 else if (_PyErr_Occurred(tstate)) {
-                    try_unlock(locals);
-                    printf(": load-name-locals\n");
+                    //printf(": load-name-locals\n");
                     goto error;
                 }
             }
             else {
                 v = PyObject_GetItem(locals, name);
-                try_unlock(locals);
-                printf(": load-name-locals\n");
+                //printf(": load-name-locals\n");
                 if (v == NULL) {
                     if (!_PyErr_ExceptionMatches(tstate, PyExc_KeyError))
                         goto error;
                     _PyErr_Clear(tstate);
                 }
                 try_lock(v);
-                printf(": load-name-v\n");
+                //printf(": load-name-v\n");
             }
             if (v == NULL) {
                 try_lock(f->f_globals);
-                printf(": load-name-globals\n");
+                //printf(": load-name-globals\n");
                 v = PyDict_GetItemWithError(f->f_globals, name);
                 if (v != NULL) {
                     try_lock(v);
-                    printf(": load-name-v\n");
+                    //printf(": load-name-v\n");
                     try_unlock(f->f_globals);
-                    printf(": load-name-globals\n");
+                    //printf(": load-name-globals\n");
                     Py_INCREF(v);
                 }
                 else if (_PyErr_Occurred(tstate)) {
                     try_unlock(f->f_globals);
-                    printf(": load-name-globals\n");
+                    //printf(": load-name-globals\n");
                     goto error;
                 }
                 else {
                     try_unlock(f->f_globals);
-                    printf(": load-name-globals\n");
+                    //printf(": load-name-globals\n");
                     try_lock(f->f_builtins);
-                    printf(": load-name-builtins\n");
+                    //printf(": load-name-builtins\n");
                     if (PyDict_CheckExact(f->f_builtins)) {
                         v = PyDict_GetItemWithError(f->f_builtins, name);
                         try_unlock(f->f_builtins);
-                        printf(": load-name-builtins\n");
+                        //printf(": load-name-builtins\n");
                         if (v == NULL) {
                             if (!_PyErr_Occurred(tstate)) {
                                 format_exc_check_arg(
@@ -2698,13 +2686,13 @@ main_loop:
                             goto error;
                         }
                         try_lock(v);
-                        printf(": load-name-v\n");
+                        //printf(": load-name-v\n");
                         Py_INCREF(v);
                     }
                     else {
                         v = PyObject_GetItem(f->f_builtins, name);
                         try_unlock(f->f_builtins);
-                        printf(": load-name-builtins\n");
+                        //printf(": load-name-builtins\n");
                         if (v == NULL) {
                             if (_PyErr_ExceptionMatches(tstate, PyExc_KeyError)) {
                                 format_exc_check_arg(
@@ -2714,7 +2702,7 @@ main_loop:
                             goto error;
                         }
                         try_lock(v);
-                        printf(": load-name-v\n");
+                        //printf(": load-name-v\n");
                     }
                 }
             }
@@ -3294,10 +3282,8 @@ main_loop:
                 Py_DECREF(from);
                 goto error;
             }
-            try_lock(locals);
             err = import_all_from(tstate, locals, from);
             PyFrame_LocalsToFast(f, 0);
-            try_unlock(locals);
             try_unlock(from);
             Py_DECREF(from);
             if (err != 0)
@@ -3452,10 +3438,10 @@ main_loop:
             PyObject *iterable = TOP();
             PyObject *iter = PyObject_GetIter(iterable);
             try_unlock(iterable);
-            printf(":iterable\n");
+            //printf(":iterable\n");
             Py_DECREF(iterable);
             try_lock(iter);
-            printf(":iter\n");
+            //printf(":iter\n");
             SET_TOP(iter);
             if (iter == NULL)
                 goto error;
@@ -3502,7 +3488,7 @@ main_loop:
             PyObject *next = (*iter->ob_type->tp_iternext)(iter);
             if (next != NULL) {
                 try_lock(next);
-                printf(":next\n");
+                //printf(":next\n");
                 PUSH(next);
                 PREDICT(STORE_FAST);
                 PREDICT(UNPACK_SEQUENCE);
@@ -3521,7 +3507,7 @@ main_loop:
             /* iterator ended normally */
             STACK_SHRINK(1);
             try_unlock(iter);
-            printf(":iter\n");
+            //printf(":iter\n");
             Py_DECREF(iter);
             JUMPBY(oparg);
             PREDICT(POP_BLOCK);
