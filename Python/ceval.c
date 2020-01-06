@@ -720,62 +720,71 @@ _Py_CheckRecursiveCall(const char *where)
     //printf("lock %p from %p\n", (void *)obj, (void *) current_thread_marker->thread_marker_pointer);
 
 #define try_lock(obj) ({\
+if (0){\
     if(obj != NULL) {\
-    _Bool previous = atomic_flag_test_and_set(&obj->in_flight);\
+    _Bool previous = atomic_flag_test_and_set_explicit(&obj->in_flight, memory_order_relaxed);\
     if (previous){\
-        printf("lock in preveous\n");\
-        while (atomic_flag_test_and_set(&obj->lock_barrier));\
-        previous = atomic_flag_test_and_set(&obj->in_flight);\
-        if (previous){\
-            if (obj->barrier == NULL) {\
-                obj->barrier = malloc(sizeof(thread_marker));\
-                obj->barrier->wait_count = 0;\
-            }\
-            obj->barrier->locks[obj->barrier->wait_count] = &(tstate->thread_lock);\
-            pthread_mutex_lock(&tstate->thread_lock);\
-            Py_BEGIN_ALLOW_THREADS\
-            atomic_flag_clear(&obj->lock_barrier);\
-            pthread_mutex_lock(&tstate->thread_lock);\
-            Py_END_ALLOW_THREADS\
-            pthread_mutex_unlock(&(tstate->thread_lock));\
-        } else {\
-            atomic_flag_clear(&obj->lock_barrier);\
+        if (obj->barrier == NULL) {\
+            obj->barrier = malloc(sizeof(thread_marker));\
+            obj->barrier->wait_count = -1;\
         }\
+        while (atomic_flag_test_and_set_explicit(&obj->lock_barrier, memory_order_relaxed));\
+        if (obj->current_thread_holder != &tstate->thread_lock) {\
+            previous = atomic_flag_test_and_set_explicit(&obj->in_flight, memory_order_relaxed);\
+            if (previous){\
+                obj->barrier->locks[obj->barrier->wait_count++] = &(tstate->thread_lock);\
+                pthread_mutex_lock(&tstate->thread_lock);\
+                Py_BEGIN_ALLOW_THREADS\
+                atomic_flag_clear_explicit(&obj->lock_barrier, memory_order_relaxed);\
+                pthread_mutex_lock(&tstate->thread_lock);\
+                Py_END_ALLOW_THREADS\
+                pthread_mutex_unlock(&(tstate->thread_lock));\
+            } else {\
+                atomic_flag_clear_explicit(&obj->lock_barrier,memory_order_relaxed);\
+            }\
+        } else {\
+            obj->barrier->wait_count++;\
+            for (int32_t i = 0; i<obj->barrier->wait_count; i++) {\
+                obj->barrier->locks[i+1] = obj->barrier->locks[i];\
+            }\
+            obj->barrier->locks[0] = NULL;\
+            atomic_flag_clear_explicit(&obj->lock_barrier, memory_order_relaxed);\
+        }\
+    } else{\
+        obj->current_thread_holder = &(tstate->thread_lock);\
     }\
-    printf("locked in flight\n");\
     }\
+}\
 });
 
 #define try_unlock(obj) ({\
+if (0) {\
     if(obj != NULL) {\
-    _Bool verify = atomic_flag_test_and_set(&obj->in_flight);\
-    printf("in unlock and verify is %i\n", verify);\
+    _Bool verify = atomic_flag_test_and_set_explicit(&obj->in_flight, memory_order_relaxed);\
     if (verify != 0) {\
-    while(atomic_flag_test_and_set(&obj->lock_barrier));\
-    printf("locked lock barrier\n");\
-    thread_marker * barrier = obj->barrier;\
-    if (barrier == NULL) {\
-        atomic_flag_clear(&obj->in_flight);\
-        printf("unlocked in flight\n");\
-        atomic_flag_clear(&obj->lock_barrier);\
-        printf("unlocked lock Barrier\n");\
-    } else {\
-        pthread_mutex_t * mutex = barrier->locks[obj->barrier->wait_count];\
-        barrier->wait_count--;\
-        if (barrier->wait_count < 0) {\
-            free(barrier);\
+        while(atomic_flag_test_and_set_explicit(&obj->lock_barrier, memory_order_relaxed));\
+        thread_marker * barrier = obj->barrier;\
+        if (barrier == NULL) {\
+            atomic_flag_clear_explicit(&obj->in_flight, memory_order_relaxed);\
+            atomic_flag_clear_explicit(&obj->lock_barrier, memory_order_relaxed);\
+        } else {\
+            pthread_mutex_t * mutex = barrier->locks[obj->barrier->wait_count];\
+            barrier->wait_count--;\
+            if (barrier->wait_count < 0) {\
+                free(barrier);\
+                obj->barrier = NULL;\
+            }\
+            if (mutex != NULL) {\
+                obj->current_thread_holder=mutex;\
+                pthread_mutex_unlock(mutex);\
+            }\
+            atomic_flag_clear_explicit(&obj->lock_barrier, memory_order_relaxed);\
         }\
-        pthread_mutex_unlock(mutex);\
-        atomic_flag_clear(&obj->lock_barrier);\
-        printf("unlocked lock barrier");\
-        atomic_flag_clear(&obj->in_flight);\
-        printf("unlocked in flight\n");\
-    }\
     } else{\
-        atomic_flag_clear(&obj->in_flight);\
+        atomic_flag_clear_explicit(&obj->in_flight, memory_order_relaxed);\
     }\
-    printf("done unlock\n\n");\
     }\
+}\
 });
 
 /*

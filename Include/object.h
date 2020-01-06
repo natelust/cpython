@@ -109,6 +109,7 @@ typedef struct _object {
     atomic_flag in_flight;
     atomic_flag lock_barrier;
     thread_marker * barrier;
+    pthread_mutex_t * current_thread_holder;
 } PyObject;
 
 /* Cast argument to PyObject* type. */
