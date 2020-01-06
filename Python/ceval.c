@@ -718,6 +718,67 @@ _Py_CheckRecursiveCall(const char *where)
 //#include <time.h>
 //inline void try_lock(PyObject * obj, PyThreadState *tstate, thread_marker * current_thread_marker){
     //printf("lock %p from %p\n", (void *)obj, (void *) current_thread_marker->thread_marker_pointer);
+
+#define try_lock(obj) ({\
+    if(obj != NULL) {\
+    _Bool previous = atomic_flag_test_and_set(&obj->in_flight);\
+    if (previous){\
+        printf("lock in preveous\n");\
+        while (atomic_flag_test_and_set(&obj->lock_barrier));\
+        previous = atomic_flag_test_and_set(&obj->in_flight);\
+        if (previous){\
+            if (obj->barrier == NULL) {\
+                obj->barrier = malloc(sizeof(thread_marker));\
+                obj->barrier->wait_count = 0;\
+            }\
+            obj->barrier->locks[obj->barrier->wait_count] = &(tstate->thread_lock);\
+            pthread_mutex_lock(&tstate->thread_lock);\
+            Py_BEGIN_ALLOW_THREADS\
+            atomic_flag_clear(&obj->lock_barrier);\
+            pthread_mutex_lock(&tstate->thread_lock);\
+            Py_END_ALLOW_THREADS\
+            pthread_mutex_unlock(&(tstate->thread_lock));\
+        } else {\
+            atomic_flag_clear(&obj->lock_barrier);\
+        }\
+    }\
+    printf("locked in flight\n");\
+    }\
+});
+
+#define try_unlock(obj) ({\
+    if(obj != NULL) {\
+    _Bool verify = atomic_flag_test_and_set(&obj->in_flight);\
+    printf("in unlock and verify is %i\n", verify);\
+    if (verify != 0) {\
+    while(atomic_flag_test_and_set(&obj->lock_barrier));\
+    printf("locked lock barrier\n");\
+    thread_marker * barrier = obj->barrier;\
+    if (barrier == NULL) {\
+        atomic_flag_clear(&obj->in_flight);\
+        printf("unlocked in flight\n");\
+        atomic_flag_clear(&obj->lock_barrier);\
+        printf("unlocked lock Barrier\n");\
+    } else {\
+        pthread_mutex_t * mutex = barrier->locks[obj->barrier->wait_count];\
+        barrier->wait_count--;\
+        if (barrier->wait_count < 0) {\
+            free(barrier);\
+        }\
+        pthread_mutex_unlock(mutex);\
+        atomic_flag_clear(&obj->lock_barrier);\
+        printf("unlocked lock barrier");\
+        atomic_flag_clear(&obj->in_flight);\
+        printf("unlocked in flight\n");\
+    }\
+    } else{\
+        atomic_flag_clear(&obj->in_flight);\
+    }\
+    printf("done unlock\n\n");\
+    }\
+});
+
+/*
 #define try_lock(obj) ({\
     thread_marker * old_value = NULL;\
     thread_marker * new_value = current_thread_marker;\
@@ -768,6 +829,7 @@ _Py_CheckRecursiveCall(const char *where)
         }\
     }\
 });
+*/
 
     // This will be removed when all the op codes are handled\
     //if (obj->barrier.thread_marker_pointer == NULL) {\
@@ -784,6 +846,8 @@ _Py_CheckRecursiveCall(const char *where)
     //old_value = NULL;\
         //thread_marker_holder = atomic_exchange_explicit(&(obj->barrier), new_thread_marker, memory_order_release);\
 
+
+/*
 #define try_unlock(obj) ({\
     thread_marker * old_value;\
     old_value = current_thread_marker;\
@@ -820,6 +884,7 @@ _Py_CheckRecursiveCall(const char *where)
         }\
     }\
 });
+*/
 
 /*
     while (atomic_compare_exchange_weak(&(obj->barrier), &old_value, new_thread_marker)==0){\

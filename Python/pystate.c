@@ -55,7 +55,7 @@ void init_thread_marker_key(){
 void set_thread_marker_key(){
     thread_marker *current_thread_marker = malloc(sizeof(thread_marker));
     current_thread_marker-> wait_count = 0;
-    current_thread_marker->is_marker = 1;
+    //current_thread_marker->is_marker = 1;
     //memset(current_thread_marker->locks, NULL, NUMBER_THREADS_CXE *sizeof(current_thread_marker->locks));
     /*
     for (unsigned int i = 0; i < NUMBER_THREADS_CXE; i++ ){

@@ -106,7 +106,9 @@ typedef struct _object {
     _PyObject_HEAD_EXTRA
     Py_ssize_t ob_refcnt;
     struct _typeobject *ob_type;
-    _Atomic (thread_marker *) barrier;
+    atomic_flag in_flight;
+    atomic_flag lock_barrier;
+    thread_marker * barrier;
 } PyObject;
 
 /* Cast argument to PyObject* type. */
@@ -444,6 +446,8 @@ static inline void _Py_NewReference(PyObject *op)
     _Py_INC_REFTOTAL;
     Py_REFCNT(op) = 1;
     op->barrier = NULL;
+    atomic_flag_clear(&op->lock_barrier);
+    atomic_flag_clear(&op->in_flight);
 }
 
 static inline void _Py_ForgetReference(PyObject *op)
