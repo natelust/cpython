@@ -748,7 +748,7 @@ start_lock:
             obj->barrier->wait_count = -1;
             obj->barrier->locks = (pthread_mutex_t **)malloc(sizeof(pthread_mutex_t *)*10000);
         }
-        if (obj->current_thread_holder != &tstate->thread_lock) {
+        if (obj->current_thread_holder != (uintptr_t) &tstate->thread_lock) {
             obj->barrier->wait_count++;
             obj->barrier->locks[obj->barrier->wait_count] = &(tstate->thread_lock);\
             //printf("%p - increment wait_count %i in %p\n", obj, obj->barrier->wait_count, &tstate->thread_lock);
@@ -809,9 +809,17 @@ void try_unlock(PyObject * obj) {
 
     // Aquire the secondary lock in a tight loop
     unsigned char previous;
-    do {
+    previous = atomic_load_explicit(&obj->barrier_lock, memory_order_relaxed);
+    if ((previous & 1) == 0) {
+        // this object was never locked, just do a store to be sure and return
+        // probably means it was created durring execution
+        //atomic_store_explicit(&obj->barrier_lock, 0, memory_order_relaxed);
+        return;
+    }
+    while( (previous & 2) != 0){
         previous = atomic_fetch_or_explicit(&obj->barrier_lock, 3, memory_order_relaxed);
-    } while( (previous & 2) != 0);
+    }
+
     // this was 1 and is now 3 meaning we hold both bits
     thread_marker * barrier = obj->barrier;
     if (barrier == NULL) {
@@ -3286,10 +3294,11 @@ main_loop:
             }
 
             PyObject *v;
-            while (oparg--)
+            while (oparg--){
                 v = POP();
                 try_unlock(v);
                 Py_DECREF(v);
+            }
             PUSH(sum);
             DISPATCH();
         }
@@ -3437,10 +3446,11 @@ main_loop:
             }
 
             PyObject *v;
-            while (oparg--)
+            while (oparg--){
                 v = POP();
                 try_unlock(v);
                 Py_DECREF(v);
+            }
             PUSH(sum);
             DISPATCH();
         }
@@ -3461,10 +3471,11 @@ main_loop:
             }
 
             PyObject * v;
-            while (oparg--)
+            while (oparg--){
                 v = POP();
                 try_unlock(v);
                 Py_DECREF(v);
+            }
             PUSH(sum);
             DISPATCH();
         }
