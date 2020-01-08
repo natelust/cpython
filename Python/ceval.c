@@ -810,14 +810,19 @@ void try_unlock(PyObject * obj) {
     // Aquire the secondary lock in a tight loop
     unsigned char previous;
     previous = atomic_load_explicit(&obj->barrier_lock, memory_order_relaxed);
+
     if ((previous & 1) == 0) {
         // this object was never locked, just do a store to be sure and return
         // probably means it was created durring execution
         //atomic_store_explicit(&obj->barrier_lock, 0, memory_order_relaxed);
         return;
     }
-    while( (previous & 2) != 0){
-        previous = atomic_fetch_or_explicit(&obj->barrier_lock, 3, memory_order_relaxed);
+    //previous = atomic_exchange_explicit(&obj->barrier_lock, 3, memory_order_relaxed);
+    previous = atomic_exchange(&obj->barrier_lock, 3);
+    
+    while( (previous &2) != 0){
+    
+        previous = atomic_exchange_explicit(&obj->barrier_lock, 3, memory_order_relaxed);
     }
 
     // this was 1 and is now 3 meaning we hold both bits
