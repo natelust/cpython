@@ -680,6 +680,8 @@ _PyThreadState_Init(_PyRuntimeState *runtime, PyThreadState *tstate)
     set_thread_marker_key();
     thread_marker * tmp = get_thread_marker_key();
     tstate->current_thread_marker = tmp;
+    pthread_mutex_init(&tstate->thread_lock, NULL);
+    printf("the mutex i %p\n", &tstate->thread_lock);
     _PyGILState_NoteThreadState(&runtime->gilstate, tstate);
 }
 

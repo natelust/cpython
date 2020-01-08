@@ -108,6 +108,7 @@ typedef struct _object {
     struct _typeobject *ob_type;
     atomic_flag in_flight;
     atomic_flag lock_barrier;
+    _Bool last_state;
     thread_marker * barrier;
     pthread_mutex_t * current_thread_holder;
 } PyObject;
@@ -449,6 +450,7 @@ static inline void _Py_NewReference(PyObject *op)
     op->barrier = NULL;
     atomic_flag_clear(&op->lock_barrier);
     atomic_flag_clear(&op->in_flight);
+    op->last_state = 0;
 }
 
 static inline void _Py_ForgetReference(PyObject *op)
