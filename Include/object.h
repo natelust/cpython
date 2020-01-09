@@ -446,7 +446,7 @@ static inline void _Py_NewReference(PyObject *op)
     _Py_INC_REFTOTAL;
     Py_REFCNT(op) = 1;
     op->barrier = NULL;
-    atomic_store(&op->barrier_lock, 0);
+    atomic_store_explicit(&op->barrier_lock, 0, memory_order_relaxed);
     
 }
 
