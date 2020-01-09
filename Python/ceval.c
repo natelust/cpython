@@ -727,7 +727,8 @@ start_lock:
         return;
     }
     // try locking the both locks
-    unsigned char previous = atomic_fetch_or_explicit(&obj->barrier_lock, 3, memory_order_relaxed);
+    //unsigned char previous = atomic_fetch_or_explicit(&obj->barrier_lock, 3, memory_order_relaxed);
+    unsigned char previous = atomic_exchange_explicit(&obj->barrier_lock, 3, memory_order_relaxed);
     //printf("%p - locking and previous is %i\n", &obj, previous);
     if (previous == 0){
         // we have the locks, set the current thread tracker, and free
