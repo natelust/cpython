@@ -726,6 +726,50 @@ start_lock:
     if (obj == NULL) {
         return;
     }
+    //while(!atomic_flag_test_and_set(&obj->lock_lock));
+    //printf("starting lock\n");
+    while(!atomic_exchange_explicit(&obj->lock_lock, 1, memory_order_relaxed));
+    //printf("have lock lock in lock\n");
+    if (atomic_load_explicit(&obj->unlock_lock, memory_order_relaxed)){
+        //printf("running goto\n");
+        goto start_lock;
+    }
+    //printf("lock has both locks\n");
+    if (!obj->in_flight){
+        obj->in_flight = 1;
+        obj->current_thread_holder = (uintptr_t) &tstate->thread_lock;
+        atomic_store_explicit(&obj->lock_lock, 0, memory_order_relaxed);
+        return;
+    } else {
+        if (obj->barrier == NULL) {
+            obj->barrier = malloc(sizeof(thread_marker));
+            obj->barrier->wait_count = -1;
+            obj->barrier->locks = (pthread_mutex_t **)malloc(sizeof(pthread_mutex_t *)*10000);
+        }
+        if (obj->current_thread_holder != (uintptr_t) &tstate->thread_lock) {
+            obj->barrier->wait_count++;
+            obj->barrier->locks[obj->barrier->wait_count] = &(tstate->thread_lock);\
+            //printf("%p - increment wait_count %i in %p\n", obj, obj->barrier->wait_count, &tstate->thread_lock);
+            //printf("%p - thread is locked\n", obj);
+            // barrier updated need to release the secondary lock
+            atomic_store_explicit(&obj->lock_lock, 0, memory_order_relaxed);
+            pthread_mutex_lock(&tstate->thread_lock);\
+            /*Py_BEGIN_ALLOW_THREADS*/\
+            pthread_mutex_lock(&tstate->thread_lock);\
+            /*Py_END_ALLOW_THREADS*/\
+            //printf("%s - thread is unlocked\n", Py_TYPE(obj)->tp_name);
+            pthread_mutex_unlock(&(tstate->thread_lock));\
+        } else {
+            obj->barrier->wait_count++;
+            //printf("%p - increment wait_count alone %i in %p\n", obj, obj->barrier->wait_count, &tstate->thread_lock);
+            for (int64_t i = 0; i<obj->barrier->wait_count; i++) {
+                obj->barrier->locks[i+1] = obj->barrier->locks[i];
+            }
+            obj->barrier->locks[0] = NULL;
+            atomic_store_explicit(&obj->lock_lock, 0, memory_order_relaxed);
+        }
+    }
+    /*
     // try locking the both locks
     //unsigned char previous = atomic_fetch_or_explicit(&obj->barrier_lock, 3, memory_order_relaxed);
     unsigned char previous = atomic_exchange_explicit(&obj->barrier_lock, 3, memory_order_relaxed);
@@ -757,9 +801,9 @@ start_lock:
             // barrier updated need to release the secondary lock
             atomic_store_explicit(&obj->barrier_lock, 1, memory_order_relaxed);
             //pthread_mutex_lock(&tstate->thread_lock);\
-            /*Py_BEGIN_ALLOW_THREADS*/\
+            Py_BEGIN_ALLOW_THREADS
             //pthread_mutex_lock(&tstate->thread_lock);\
-            /*Py_END_ALLOW_THREADS*/\
+            Py_END_ALLOW_THREADS
             //printf("%s - thread is unlocked\n", Py_TYPE(obj)->tp_name);
             pthread_mutex_unlock(&(tstate->thread_lock));\
         } else {
@@ -777,6 +821,7 @@ start_lock:
         // everything was already locked, go try again
         goto start_lock;
     }
+    */
 
     /*
         // we dont have the main lock try getting the secondary lock
@@ -804,34 +849,49 @@ void try_unlock(PyObject * obj) {
     if (obj == NULL) {
         return;
     }
+    //printf("unlocking with no locks\n");
+    atomic_store_explicit(&obj->unlock_lock, 1, memory_order_relaxed);
+    //printf("unlocking with one locks\n");
+    while(atomic_load_explicit(&obj->lock_lock, memory_order_relaxed));
+    //printf("unlocking with both locks \n");
+    if (!obj->in_flight){
+        atomic_store_explicit(&obj->unlock_lock, 0, memory_order_relaxed);
+        atomic_store_explicit(&obj->lock_lock, 0, memory_order_relaxed);
+        return;
+    } else {
+
+        
     // if we are in unlock, that means we have the primary lock for sure,
     // but need to do an or against both locks, as to not release the
     // main lock until we are ready.
 
-    // Aquire the secondary lock in a tight loop
-    unsigned char previous;
-    previous = atomic_load_explicit(&obj->barrier_lock, memory_order_relaxed);
+    //unsigned char previous;
+    //previous = atomic_load_explicit(&obj->barrier_lock, memory_order_relaxed);
 
-    if ((previous & 1) == 0) {
+    //if ((previous & 1) == 0) {
         // this object was never locked, just do a store to be sure and return
         // probably means it was created durring execution
         //atomic_store_explicit(&obj->barrier_lock, 0, memory_order_relaxed);
-        return;
-    }
+    //    return;
+    //}
     //previous = atomic_exchange_explicit(&obj->barrier_lock, 3, memory_order_relaxed);
-    previous = atomic_exchange(&obj->barrier_lock, 3);
+    //previous = atomic_exchange(&obj->barrier_lock, 3);
     
-    while( (previous &2) != 0){
+    // Aquire the secondary lock in a tight loop
+    //while( (previous &2) != 0){
     
-        previous = atomic_exchange_explicit(&obj->barrier_lock, 3, memory_order_relaxed);
-    }
+    //    previous = atomic_exchange_explicit(&obj->barrier_lock, 3, memory_order_relaxed);
+    //}
 
     // this was 1 and is now 3 meaning we hold both bits
     thread_marker * barrier = obj->barrier;
     if (barrier == NULL) {
         // there is no one waiting, unlock both locks and return
         //printf("%p - var is unlocked\n", obj);
-        atomic_store_explicit(&obj->barrier_lock, 0, memory_order_relaxed);
+        //atomic_store_explicit(&obj->barrier_lock, 0, memory_order_relaxed);
+        obj->in_flight = 0;
+        atomic_store_explicit(&obj->unlock_lock, 0, memory_order_relaxed);
+        atomic_store_explicit(&obj->lock_lock, 0, memory_order_relaxed);
         return;
     }
 
@@ -862,16 +922,21 @@ void try_unlock(PyObject * obj) {
         pthread_mutex_unlock(mutex);
         // now we are passing on control to the next thread, so we dont want to
         // release the main lock, just the secondary
-        atomic_store_explicit(&obj->barrier_lock, 1, memory_order_relaxed);
+        //atomic_store_explicit(&obj->barrier_lock, 1, memory_order_relaxed);
+        atomic_store_explicit(&obj->unlock_lock, 0, memory_order_relaxed);
+        atomic_store_explicit(&obj->lock_lock, 0, memory_order_relaxed);
     } else{
         //printf("%p - clearing lock alone\n", obj);
         // the next load was from our own thread, so just clear the secondary
         // lock, the next unlock operation may clear both
-        if (wait_copy <0){ 
-            atomic_store_explicit(&obj->barrier_lock, 0, memory_order_relaxed);
-        } else {
-            atomic_store_explicit(&obj->barrier_lock, 1, memory_order_relaxed);
-        }
+        //if (wait_copy <0){ 
+        //    atomic_store_explicit(&obj->barrier_lock, 0, memory_order_relaxed);
+        //} else {
+        //    atomic_store_explicit(&obj->barrier_lock, 1, memory_order_relaxed);
+        //}
+        atomic_store_explicit(&obj->unlock_lock, 0, memory_order_relaxed);
+        atomic_store_explicit(&obj->lock_lock, 0, memory_order_relaxed);
+    }
     }
 }
 
