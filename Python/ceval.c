@@ -735,11 +735,12 @@ void try_lock(PyObject * obj, PyThreadState * tstate){
         if (tstate == owner_thread){
             obj->in_flight_count++;
         } else {
+            // Lock and insert into the tstate
+            while(!atomic_exchange_explicit(&owner_thread->tstate_lock, 1, memory_order_relaxed));
+
             // Request that this variable be upgraded
             atomic_store_explicit(&obj->request, &request_thread_lock, memory_order_relaxed);
 
-            // Lock and insert into the tstate
-            while(!atomic_exchange_explicit(&owner_thread->tstate_lock, 1, memory_order_relaxed));
             size_t i;
             for (i = 0; i < NUMBER_THREADS_CXE; i++) {
                 if (owner_thread->pyobject_locator[i] == obj) {
