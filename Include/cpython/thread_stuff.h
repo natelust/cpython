@@ -8,7 +8,11 @@
 
 typedef struct thread_marker {
     int64_t wait_count;
-    pthread_mutex_t **locks;    
+    PyThreadState *locks[NUMBER_THREADS_CXE];
 } thread_marker;
+
+typedef struct multi_thread {
+    _Bool upgrade
+} multi_thread;
 
 #endif

@@ -106,12 +106,10 @@ typedef struct _object {
     _PyObject_HEAD_EXTRA
     Py_ssize_t ob_refcnt;
     struct _typeobject *ob_type;
-    atomic_bool lock_lock;
-    atomic_bool unlock_lock;
-    unsigned char in_flight;
-    //atomic_uchar barrier_lock;
-    thread_marker * barrier;
-    uintptr_t current_thread_holder;
+    Py_ssize_t in_flight_count;
+    _Atomic multi_thread * request;
+    atomic_bool thread_lock;
+    PyThreadState * owner_thread;
 } PyObject;
 
 /* Cast argument to PyObject* type. */
@@ -448,12 +446,9 @@ static inline void _Py_NewReference(PyObject *op)
     _Py_INC_TPALLOCS(op);
     _Py_INC_REFTOTAL;
     Py_REFCNT(op) = 1;
-    op->barrier = NULL;
-    //atomic_store(&op->barrier_lock, 0);
-    atomic_store_explicit(&op->unlock_lock, 0,memory_order_relaxed);
-    atomic_store_explicit(&op->lock_lock, 0, memory_order_relaxed);
-    op->in_flight = 0;
     
+    op->in_flight_count = 0;
+    op->owner_thread = _PyRuntimeState_GetThreadState();
 }
 
 static inline void _Py_ForgetReference(PyObject *op)

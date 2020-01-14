@@ -721,128 +721,49 @@ _Py_CheckRecursiveCall(const char *where)
 
 //#define try_lock(obj) ({\
 
+static multi_thread request_thread_lock = {.upgrade =1};
+static multi_thread multi_state = {.upgrade =1};
+
 void try_lock(PyObject * obj, PyThreadState * tstate){
-start_lock:
     if (obj == NULL) {
         return;
     }
-    //while(!atomic_flag_test_and_set(&obj->lock_lock));
-    //printf("starting lock\n");
-    while(!atomic_exchange_explicit(&obj->lock_lock, 1, memory_order_relaxed));
-    //printf("have lock lock in lock\n");
-    if (atomic_load_explicit(&obj->unlock_lock, memory_order_relaxed)){
-        //printf("running goto\n");
-        goto start_lock;
-    }
-    //printf("lock has both locks\n");
-    if (!obj->in_flight){
-        obj->in_flight = 1;
-        obj->current_thread_holder = (uintptr_t) &tstate->thread_lock;
-        atomic_store_explicit(&obj->lock_lock, 0, memory_order_relaxed);
-        return;
+    if (atomic_load_explicit(&obj->request, memory_order_relaxed) == &multi_state) {
+        while(!atomic_exchange_explicit(&obj->thread_lock, 1, memory_order_relaxed));
     } else {
-        if (obj->barrier == NULL) {
-            obj->barrier = malloc(sizeof(thread_marker));
-            obj->barrier->wait_count = -1;
-            obj->barrier->locks = (pthread_mutex_t **)malloc(sizeof(pthread_mutex_t *)*10000);
-        }
-        if (obj->current_thread_holder != (uintptr_t) &tstate->thread_lock) {
-            obj->barrier->wait_count++;
-            obj->barrier->locks[obj->barrier->wait_count] = &(tstate->thread_lock);\
-            //printf("%p - increment wait_count %i in %p\n", obj, obj->barrier->wait_count, &tstate->thread_lock);
-            //printf("%p - thread is locked\n", obj);
-            // barrier updated need to release the secondary lock
-            atomic_store_explicit(&obj->lock_lock, 0, memory_order_relaxed);
-            pthread_mutex_lock(&tstate->thread_lock);\
-            /*Py_BEGIN_ALLOW_THREADS*/\
-            pthread_mutex_lock(&tstate->thread_lock);\
-            /*Py_END_ALLOW_THREADS*/\
-            //printf("%s - thread is unlocked\n", Py_TYPE(obj)->tp_name);
-            pthread_mutex_unlock(&(tstate->thread_lock));\
+        PyThreadState * owner_thread = obj->owner_thread;
+        if (tstate == owner_thread){
+            obj->in_flight_count++;
         } else {
-            obj->barrier->wait_count++;
-            //printf("%p - increment wait_count alone %i in %p\n", obj, obj->barrier->wait_count, &tstate->thread_lock);
-            for (int64_t i = 0; i<obj->barrier->wait_count; i++) {
-                obj->barrier->locks[i+1] = obj->barrier->locks[i];
-            }
-            obj->barrier->locks[0] = NULL;
-            atomic_store_explicit(&obj->lock_lock, 0, memory_order_relaxed);
-        }
-    }
-    /*
-    // try locking the both locks
-    //unsigned char previous = atomic_fetch_or_explicit(&obj->barrier_lock, 3, memory_order_relaxed);
-    unsigned char previous = atomic_exchange_explicit(&obj->barrier_lock, 3, memory_order_relaxed);
-    //printf("%p - locking and previous is %i\n", &obj, previous);
-    if (previous == 0){
-        // we have the locks, set the current thread tracker, and free
-        // the secondary lock
-        //printf("%p - var is locked\n", obj);
-        obj->current_thread_holder = (uintptr_t) &tstate->thread_lock;
-        atomic_store_explicit(&obj->barrier_lock, 1, memory_order_relaxed);
-        return;
-    } else if (previous == 2) {
-        // but now have the lock anyway
-        //printf("Should not be here!\n");
-    } else if (previous == 1) {
-        // previously the main lock was locked, but not the secondary,
-        // which we just locked now.
-        // we have the secondary lock, can update the barrier object
-        if (obj->barrier == NULL) {
-            obj->barrier = malloc(sizeof(thread_marker));
-            obj->barrier->wait_count = -1;
-            obj->barrier->locks = (pthread_mutex_t **)malloc(sizeof(pthread_mutex_t *)*10000);
-        }
-        if (obj->current_thread_holder != (uintptr_t) &tstate->thread_lock) {
-            obj->barrier->wait_count++;
-            obj->barrier->locks[obj->barrier->wait_count] = &(tstate->thread_lock);\
-            //printf("%p - increment wait_count %i in %p\n", obj, obj->barrier->wait_count, &tstate->thread_lock);
-            //printf("%p - thread is locked\n", obj);
-            // barrier updated need to release the secondary lock
-            atomic_store_explicit(&obj->barrier_lock, 1, memory_order_relaxed);
-            //pthread_mutex_lock(&tstate->thread_lock);\
-            Py_BEGIN_ALLOW_THREADS
-            //pthread_mutex_lock(&tstate->thread_lock);\
-            Py_END_ALLOW_THREADS
-            //printf("%s - thread is unlocked\n", Py_TYPE(obj)->tp_name);
-            pthread_mutex_unlock(&(tstate->thread_lock));\
-        } else {
-            obj->barrier->wait_count++;
-            //printf("%p - increment wait_count alone %i in %p\n", obj, obj->barrier->wait_count, &tstate->thread_lock);
-            for (int64_t i = 0; i<obj->barrier->wait_count; i++) {
-                obj->barrier->locks[i+1] = obj->barrier->locks[i];
-            }
-            obj->barrier->locks[0] = NULL;
-            // barrier updated need to release the secondary lock
-            atomic_store_explicit(&obj->barrier_lock, 1, memory_order_relaxed);
-        }
-        return;
-    } else {
-        // everything was already locked, go try again
-        goto start_lock;
-    }
-    */
+            // Request that this variable be upgraded
+            atomic_store_explicit(&obj->request, &request_thread_lock, memory_order_relaxed);
 
-    /*
-        // we dont have the main lock try getting the secondary lock
-        // in a tight loop
-        printf("%p - locking in previous equal to 1\n", obj);
-        do {
-        previous = atomic_fetch_or(&obj->barrier_lock, 3);
-        } while((previous & 2)  != 0);
-        printf("%p - after loop in locking previous 1\n", obj);
-        // ok, so we definately hold the lock on the barrier object
-        // but check if we got the lock on the PyObject by chance
-        if ((previous  & 1) == 0) {
-            //we got ahold of the lock on this var, remove the lock on
-            // the secondary set the current_thread_holder and return
-            printf("%p - var is locked after while\n", obj);
-            obj->current_thread_holder = &tstate->thread_lock;
-            atomic_store(&obj->barrier_lock, 1);
-            return;
+            // Lock and insert into the tstate
+            while(!atomic_exchange_explicit(&owner_thread->tstate_lock, 1, memory_order_relaxed));
+            size_t i;
+            for (i = 0; i < NUMBER_THREADS_CXE; i++) {
+                if (owner_thread->pyobject_locator[i] == obj) {
+                    break;
+                }
+            }
+            if (i == NUMBER_THREADS_CXE) {
+                // find a place to put it
+                for (i = 0; i < NUMBER_THREADS_CXE; i++) {
+                    if (owner_thread->pyobject_locator[i] == NULL) {
+                        break;
+                    }
+                }
+                owner_thread->pyobject_locator[i] == obj;
+            }
+            owner_thread->marker_locator[i].wait_count++;
+            owner_thread->marker_locator[i].locks[owner_thread->marker_locator[i].wait_count] = tstate;
+            
+            pthread_mutex_lock(&tstate->thread_lock);
+            atomic_store_explicit(&owner_thread->tstate_lock, 0, memory_order_relaxed);
+            pthread_mutex_lock(&tstate->thread_lock);
+            pthread_mutex_unlock(&(tstate->thread_lock));
         }
     }
-    */
 }
 
 void try_unlock(PyObject * obj) {
