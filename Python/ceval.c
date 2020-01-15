@@ -729,14 +729,14 @@ void try_lock(PyObject * obj, PyThreadState * tstate){
         return;
     }
     if (atomic_load_explicit(&obj->request, memory_order_relaxed) == &multi_state) {
-        while(!atomic_exchange_explicit(&obj->thread_lock, 1, memory_order_relaxed));
+        while(atomic_exchange_explicit(&obj->thread_lock, 1, memory_order_relaxed));
     } else {
         PyThreadState * owner_thread = obj->owner_thread;
         if (tstate == owner_thread){
             obj->in_flight_count++;
         } else {
             // Lock and insert into the tstate
-            while(!atomic_exchange_explicit(&owner_thread->tstate_lock, 1, memory_order_relaxed));
+            while(atomic_exchange_explicit(&owner_thread->tstate_lock, 1, memory_order_relaxed));
 
             // Request that this variable be upgraded
             atomic_store_explicit(&obj->request, &request_thread_lock, memory_order_relaxed);
@@ -765,6 +765,36 @@ void try_lock(PyObject * obj, PyThreadState * tstate){
             pthread_mutex_unlock(&(tstate->thread_lock));
         }
     }
+}
+
+void try_unlock(PyObject * obj, PyThreadState * tstate){
+    if (obj == NULL) {
+        return;
+    }
+    if (atomic_load_explicit(&obj->request, memory_order_relaxed) == &multi_state) {
+        // do things atomicly like before
+    } else {
+        PyThreadState * owner_thread = obj->owner_thread;
+        if (tstate == owner_thread){
+            obj->in_flight_count--;
+        } else {
+            if (obj->in_flight_count == 0) {
+                if (atomic_load_explicit(&obj->request, memory_order_relaxed) == &request_thread_lock) {
+                    // Lock and read from the tstate
+                    while(atomic_exchange_explicit(&owner_thread->tstate_lock, 1, memory_order_relaxed));
+
+                    // find the pyobject marker
+                    size_t i;
+                    for (i = 0; i < NUMBER_THREADS_CXE; i++) {
+                        if (owner_thread->pyobject_locator[i] == obj) {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
 }
 
 void try_unlock(PyObject * obj) {
