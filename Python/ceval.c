@@ -721,22 +721,50 @@ _Py_CheckRecursiveCall(const char *where)
 
 //#define try_lock(obj) ({\
 
-static multi_thread request_thread_lock = {.upgrade =1};
-static multi_thread multi_state = {.upgrade =1};
+static _Atomic multi_thread request_thread_lock = {.upgrade =1};
+static _Atomic multi_thread multi_state = {.upgrade =1};
 
 void try_lock(PyObject * obj, PyThreadState * tstate){
+lock_start:
     if (obj == NULL) {
         return;
     }
     if (atomic_load_explicit(&obj->request, memory_order_relaxed) == &multi_state) {
         while(atomic_exchange_explicit(&obj->thread_lock, 1, memory_order_relaxed));
+        if (obj->thread_queue == NULL) {
+            obj->thread_queue = (thread_marker *) malloc(sizeof(thread_marker));
+            obj->thread_queue->wait_count = -1;
+        }
+        if ((uintptr_t) tstate == obj->current_thread) {
+            obj->thread_queue->wait_count++;
+            obj->thread_queue->locks[obj->thread_queue->wait_count] = NULL;
+            atomic_store_explicit(&obj->thread_lock, 0, memory_order_relaxed);
+        } else {
+            // the object is currently being used in another thread, add to the queue
+            obj->thread_queue->wait_count++;
+            obj->thread_queue->locks[obj->thread_queue->wait_count] = tstate;
+            pthread_mutex_lock(&tstate->thread_lock);
+            atomic_store_explicit(&obj->thread_lock, 0, memory_order_relaxed);
+            pthread_mutex_lock(&tstate->thread_lock);
+            pthread_mutex_unlock(&(tstate->thread_lock));
+        }
     } else {
         PyThreadState * owner_thread = obj->owner_thread;
+        if (owner_thread == NULL) {
+            // I dont understand how this is, _Py_NewReference seems to not be called
+            return;
+        }
         if (tstate == owner_thread){
             obj->in_flight_count++;
         } else {
             // Lock and insert into the tstate
             while(atomic_exchange_explicit(&owner_thread->tstate_lock, 1, memory_order_relaxed));
+            if (atomic_load_explicit(&obj->request, memory_order_relaxed) == &multi_state){
+                // This was converted to a multi thread var while waiting for the lock
+                // go back at start again
+                atomic_store_explicit(&owner_thread->tstate_lock, 0, memory_order_relaxed);
+                goto lock_start;
+            }
 
             // Request that this variable be upgraded
             atomic_store_explicit(&obj->request, &request_thread_lock, memory_order_relaxed);
@@ -754,7 +782,7 @@ void try_lock(PyObject * obj, PyThreadState * tstate){
                         break;
                     }
                 }
-                owner_thread->pyobject_locator[i] == obj;
+                owner_thread->pyobject_locator[i] = obj;
             }
             owner_thread->marker_locator[i].wait_count++;
             owner_thread->marker_locator[i].locks[owner_thread->marker_locator[i].wait_count] = tstate;
@@ -772,7 +800,30 @@ void try_unlock(PyObject * obj, PyThreadState * tstate){
         return;
     }
     if (atomic_load_explicit(&obj->request, memory_order_relaxed) == &multi_state) {
-        // do things atomicly like before
+        while(atomic_exchange_explicit(&obj->thread_lock, 1, memory_order_relaxed));
+        if (obj->thread_queue == NULL) {
+            // got here somehow, nothing to do just return
+            atomic_store_explicit(&obj->thread_lock, 0, memory_order_relaxed);
+            return;
+        }
+        // grab the first thing to unlock
+        PyThreadState * mutex = obj->thread_queue->locks[0];
+        // bring the wait count down since the bottom was taken
+        obj->thread_queue->wait_count--;
+        if (obj->thread_queue->wait_count < 0) {
+            free(obj->thread_queue);
+            obj->thread_queue = NULL;
+        } else {
+            // need to move all the locks down
+            for (size_t i = 1; i<=(obj->thread_queue->wait_count+1); i++) {
+                obj->thread_queue->locks[i-1] = obj->thread_queue->locks[i];
+            }
+        }
+        if (mutex != NULL) {
+            obj->current_thread = (uintptr_t) mutex;
+            pthread_mutex_unlock(&mutex->thread_lock);
+        }
+        atomic_store_explicit(&obj->thread_lock, 0, memory_order_relaxed);
     } else {
         PyThreadState * owner_thread = obj->owner_thread;
         if (tstate == owner_thread){
@@ -790,365 +841,35 @@ void try_unlock(PyObject * obj, PyThreadState * tstate){
                             break;
                         }
                     }
+                    thread_marker * marker = &owner_thread->marker_locator[i];   
+                    // copy all the thread marker into a new marker and clear the tstate
+                    thread_marker * new_marker = (thread_marker *) malloc(sizeof(thread_marker));
+                    new_marker->wait_count = marker->wait_count;
+                    // grab the bottom lock to unlock
+                    pthread_mutex_t * lock = &marker->locks[0]->thread_lock;
+                    for (size_t i = 1; i <= marker->wait_count; i++){
+                        new_marker->locks[i-1] = marker->locks[i];
+                    }
+                    // reset the marker in the thread object so it can be reused
+                    marker->wait_count = -1;
+                    // clear the pyobject on the tstate queue
+                    owner_thread->pyobject_locator[i] = NULL;
+                    // set the new marker on the object
+                    obj->thread_queue = new_marker;
+                    obj->current_thread = (uintptr_t) &marker->locks[0];
+                    // make this a multi thread object
+                    atomic_store_explicit(&obj->request, &multi_state, memory_order_relaxed);
+                    // unlock the waiting mutex
+                    pthread_mutex_unlock(lock);
+                    // unlock the tstate lock
+                    atomic_store_explicit(&owner_thread->tstate_lock, 0, memory_order_relaxed);
+                    // should be in a multi thread variable
                 }
             }
         }
     }
 
 }
-
-void try_unlock(PyObject * obj) {
-    if (obj == NULL) {
-        return;
-    }
-    //printf("unlocking with no locks\n");
-    atomic_store_explicit(&obj->unlock_lock, 1, memory_order_relaxed);
-    //printf("unlocking with one locks\n");
-    while(atomic_load_explicit(&obj->lock_lock, memory_order_relaxed));
-    //printf("unlocking with both locks \n");
-    if (!obj->in_flight){
-        atomic_store_explicit(&obj->unlock_lock, 0, memory_order_relaxed);
-        atomic_store_explicit(&obj->lock_lock, 0, memory_order_relaxed);
-        return;
-    } else {
-
-        
-    // if we are in unlock, that means we have the primary lock for sure,
-    // but need to do an or against both locks, as to not release the
-    // main lock until we are ready.
-
-    //unsigned char previous;
-    //previous = atomic_load_explicit(&obj->barrier_lock, memory_order_relaxed);
-
-    //if ((previous & 1) == 0) {
-        // this object was never locked, just do a store to be sure and return
-        // probably means it was created durring execution
-        //atomic_store_explicit(&obj->barrier_lock, 0, memory_order_relaxed);
-    //    return;
-    //}
-    //previous = atomic_exchange_explicit(&obj->barrier_lock, 3, memory_order_relaxed);
-    //previous = atomic_exchange(&obj->barrier_lock, 3);
-    
-    // Aquire the secondary lock in a tight loop
-    //while( (previous &2) != 0){
-    
-    //    previous = atomic_exchange_explicit(&obj->barrier_lock, 3, memory_order_relaxed);
-    //}
-
-    // this was 1 and is now 3 meaning we hold both bits
-    thread_marker * barrier = obj->barrier;
-    if (barrier == NULL) {
-        // there is no one waiting, unlock both locks and return
-        //printf("%p - var is unlocked\n", obj);
-        //atomic_store_explicit(&obj->barrier_lock, 0, memory_order_relaxed);
-        obj->in_flight = 0;
-        atomic_store_explicit(&obj->unlock_lock, 0, memory_order_relaxed);
-        atomic_store_explicit(&obj->lock_lock, 0, memory_order_relaxed);
-        return;
-    }
-
-    pthread_mutex_t * mutex = barrier->locks[0];
-    
-    for (int64_t i = 0; i<obj->barrier->wait_count; i++){
-        //printf("%p - moving down %p\n", obj, obj->barrier->locks[i]);
-        //if (obj->barrier->locks[i+1] != NULL){
-        //printf("%p - moving down %p\n", obj, obj->barrier->locks[i+1]);
-        //}
-        obj->barrier->locks[i] = obj->barrier->locks[i+1];
-    }
-
-    obj->barrier->wait_count--;
-    int64_t wait_copy = obj->barrier->wait_count;
-    if (barrier->wait_count < 0) {
-        free(barrier->locks);
-        free(barrier);
-        obj->barrier = NULL;
-    }
-
-    if (mutex != NULL) {\
-    //printf("%p - the current_thread_holder is %p\n", obj, obj->current_thread_holder);
-    //printf("%p - the mutex is %p\n", obj, mutex);
-        // set the marker for the new current thread
-        obj->current_thread_holder= (uintptr_t) mutex;
-        //printf("%p - unlocking %p\n", obj, mutex);
-        pthread_mutex_unlock(mutex);
-        // now we are passing on control to the next thread, so we dont want to
-        // release the main lock, just the secondary
-        //atomic_store_explicit(&obj->barrier_lock, 1, memory_order_relaxed);
-        atomic_store_explicit(&obj->unlock_lock, 0, memory_order_relaxed);
-        atomic_store_explicit(&obj->lock_lock, 0, memory_order_relaxed);
-    } else{
-        //printf("%p - clearing lock alone\n", obj);
-        // the next load was from our own thread, so just clear the secondary
-        // lock, the next unlock operation may clear both
-        //if (wait_copy <0){ 
-        //    atomic_store_explicit(&obj->barrier_lock, 0, memory_order_relaxed);
-        //} else {
-        //    atomic_store_explicit(&obj->barrier_lock, 1, memory_order_relaxed);
-        //}
-        atomic_store_explicit(&obj->unlock_lock, 0, memory_order_relaxed);
-        atomic_store_explicit(&obj->lock_lock, 0, memory_order_relaxed);
-    }
-    }
-}
-
-
-
-
-
-/*
-if (1){
-lock_start:
-    if(obj != NULL) {
-    _Bool previous = atomic_flag_test_and_set(&obj->in_flight);
-    if (previous){\
-        while (atomic_flag_test_and_set(&obj->lock_barrier));\
-        if (obj->last_state == 1){
-            printf("goto lock start\n");
-            atomic_flag_clear(&obj->lock_barrier);
-            goto lock_start;
-        }
-        if (obj->barrier == NULL) {\
-            obj->barrier = malloc(sizeof(thread_marker));\
-            obj->barrier->wait_count = -1;\
-            obj->barrier->locks = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t *)*10000);
-        }\
-        if (obj->current_thread_holder != &tstate->thread_lock) {\
-            //previous = atomic_flag_test_and_set(&obj->in_flight);\
-            //if (previous){
-                obj->barrier->wait_count++;
-                obj->barrier->locks[obj->barrier->wait_count] = &(tstate->thread_lock);\
-                printf("%s - increment wait_count %i in %p\n", Py_TYPE(obj)->tp_name, obj->barrier->wait_count, &tstate->thread_lock);
-                printf("%s - thread is locked\n", Py_TYPE(obj)->tp_name);
-                pthread_mutex_lock(&tstate->thread_lock);\
-                atomic_flag_clear(&obj->lock_barrier);\
-                pthread_mutex_lock(&tstate->thread_lock);\
-                printf("%s - thread is unlocked\n", Py_TYPE(obj)->tp_name);
-                pthread_mutex_unlock(&(tstate->thread_lock));\
-            } else {\
-                printf("%p - cleared early in thread\n", obj, &tstate->thread_lock);
-                if (obj->barrier != NULL && obj->barrier->wait_count == -1) {
-                    free(obj->barrier->locks);
-                    free(obj->barrier);
-                    obj->barrier = NULL;
-                }
-                atomic_flag_clear(&obj->lock_barrier);\
-            }\
-        } else {\
-            obj->barrier->wait_count++;\
-            printf("%s - increment wait_count alone %i in %p\n", Py_TYPE(obj)->tp_name, obj->barrier->wait_count, &tstate->thread_lock);
-            for (int64_t i = 0; i<obj->barrier->wait_count; i++) {\
-                obj->barrier->locks[i+1] = obj->barrier->locks[i];\
-            }\
-            obj->barrier->locks[0] = NULL;\
-            atomic_flag_clear(&obj->lock_barrier);\
-        }\
-    } else{\
-        obj->last_state = 0;
-        obj->current_thread_holder = &(tstate->thread_lock);\
-    }\
-    }\
-}
-}*/
-//});
-
-//#define try_unlock(obj) ({\
-
-/*
-void try_unlock(PyObject * obj) {
-if (1) {\
-    if(obj != NULL) {\
-    _Bool verify = atomic_flag_test_and_set(&obj->in_flight);\
-    if (verify != 0) {\
-        while(atomic_flag_test_and_set(&obj->lock_barrier));\
-        obj->last_state = 1;
-        thread_marker * barrier = obj->barrier;\
-        if (barrier == NULL) {\
-            //printf("%p - barrier is null unlocking the in flight lock \n", obj);
-            atomic_flag_clear(&obj->in_flight);\
-            atomic_flag_clear(&obj->lock_barrier);\
-        } else{\
-            printf("%p - the wait cout is %i\n", obj, obj->barrier->wait_count);
-            pthread_mutex_t * mutex = barrier->locks[0];\
-            
-            for (int64_t i = 0; i<obj->barrier->wait_count; i++){
-                if (obj->barrier->locks[i+1] != NULL){
-                printf("%p - moving down %p\n", obj, obj->barrier->locks[i+1]);
-                }
-                obj->barrier->locks[i] = obj->barrier->locks[i+1];
-            }
-
-            obj->barrier->wait_count--;\
-            if (barrier->wait_count < 0) {\
-                free(barrier->locks);\
-                free(barrier);\
-                obj->barrier = NULL;\
-            }\
-            if (mutex != NULL) {\
-            printf("%p - the current_thread_holder is %p\n", obj, obj->current_thread_holder);
-            printf("%p - the mutex is %p\n", obj, mutex);
-
-                obj->current_thread_holder=mutex;\
-                printf("%p - unlocking %p\n", obj, mutex);
-                pthread_mutex_unlock(mutex);\
-                atomic_flag_clear(&obj->lock_barrier);\
-            } else{\
-                printf("%p - clearing lock alone\n", obj);
-                //printf("%p - unlocking the in flight lock \n", obj);
-                atomic_flag_clear(&obj->in_flight);\
-                atomic_flag_clear(&obj->lock_barrier);\
-            }\
-        }\
-    } else{\
-        //printf("%p - unlocking the in flight lock \n", obj);
-        atomic_flag_clear(&obj->in_flight);
-    }
-    }
-}
-}
-
-*/
-
-//});
-
-/*
-#define try_lock(obj) ({\
-    thread_marker * old_value = NULL;\
-    thread_marker * new_value = current_thread_marker;\
-    thread_marker * pointer_for_free = NULL;\
-    thread_marker * new_marker = NULL;\
-    _Bool created_new = 0;\
-    _Bool go_atomic = 1;\
-\
-    if (obj == NULL) {\
-        go_atomic = 0;\
-    }\
-\
-    if (go_atomic) {\
-        while (atomic_compare_exchange_weak_explicit(&(obj->barrier), &old_value, new_value, memory_order_relaxed, memory_order_relaxed) == 0){\
-            if (old_value== current_thread_marker) {\
-                break;\
-            } else if (old_value== NULL) {\
-                new_value= current_thread_marker;\
-            } else {\
-                pointer_for_free = NULL;\
-                if (new_marker == NULL){\
-                    new_marker = malloc(sizeof(thread_marker));\
-                    created_new = 1;\
-                }\
-                for (unsigned int i = 0; i < old_value->wait_count; i++) {\
-                    new_marker->locks[i] = old_value->locks[i];\
-                }\
-                new_marker->wait_count = old_value->wait_count + 1;\
-                new_marker->is_marker = 0;\
-                new_marker->locks[new_marker->wait_count - 1] = &(tstate->thread_lock);\
-\
-                if (old_value->is_marker == 0) {\
-                    pointer_for_free = old_value;\
-                }\
-\
-                new_value= new_marker;\
-            }\
-        }\
-        if ( pointer_for_free != NULL) {\
-            free(pointer_for_free);\
-        }\
-        if (created_new) {\
-            pthread_mutex_lock(&(tstate->thread_lock));\
-            Py_BEGIN_ALLOW_THREADS\
-            pthread_mutex_lock(&(tstate->thread_lock));\
-            Py_END_ALLOW_THREADS\
-            pthread_mutex_unlock(&(tstate->thread_lock));\
-        }\
-    }\
-});
-*/
-
-    // This will be removed when all the op codes are handled\
-    //if (obj->barrier.thread_marker_pointer == NULL) {\
-    //    obj->barrier.thread_marker_pointer = current_thread_marker->thread_marker_pointer;\
-    //}\
-\
-    //clock_t t1 = clock();\
-    //printf("unlock %p from %p\n", (void *)obj, (void *) current_thread_marker->thread_marker_pointer);\
-
-        //printf("inside while\n");\
-
-//inline void try_unlock(PyObject * obj, thread_barrier * current_thread_marker) {
-    //old_value.thread_marker_pointer = current_thread_marker->thread_marker_pointer;\
-    //old_value = NULL;\
-        //thread_marker_holder = atomic_exchange_explicit(&(obj->barrier), new_thread_marker, memory_order_release);\
-
-
-/*
-#define try_unlock(obj) ({\
-    thread_marker * old_value;\
-    old_value = current_thread_marker;\
-    thread_marker * thread_marker_holder = NULL;\
-    thread_marker * new_thread_marker = NULL;\
-    _Bool go_atomic = 1;\
-\
-    if (obj == NULL){\
-        go_atomic = 0;\
-    }\
-    \
-    if (go_atomic){\
-        while(atomic_compare_exchange_weak_explicit(&(obj->barrier), &old_value, new_thread_marker, memory_order_relaxed, memory_order_relaxed)==0){\
-            thread_marker_holder = old_value;\
-            if (thread_marker_holder != NULL && thread_marker_holder != current_thread_marker) {\
-                printf("should not be here");\
-                if (thread_marker_holder->wait_count >= 1) {\
-                    if (new_thread_marker == NULL) {\
-                        new_thread_marker = malloc(sizeof(thread_marker));  \
-                    }\
-                    new_thread_marker->wait_count = thread_marker_holder->wait_count -1;\
-                    new_thread_marker->is_marker = 0;\
-                    for (unsigned int i = 1; i < thread_marker_holder->wait_count; i++){\
-                        new_thread_marker->locks[i-1] = thread_marker_holder->locks[i];\
-                    }\
-                } \
-            }\
-        }\
-        if (thread_marker_holder != NULL && thread_marker_holder->is_marker == 0) {\
-            if (thread_marker_holder->locks[0] != NULL &&  thread_marker_holder->wait_count != 0) {\
-                pthread_mutex_unlock(thread_marker_holder->locks[0]);\
-            }\
-            free(thread_marker_holder);\
-        }\
-    }\
-});
-*/
-
-/*
-    while (atomic_compare_exchange_weak(&(obj->barrier), &old_value, new_thread_marker)==0){\
-        thread_marker_holder = old_value;\
-        if (thread_marker_holder == NULL){\
-            break;\
-        }\
-\
-        if (thread_marker_holder->wait_count >= 1) {\
-            if (new_thread_marker == NULL) {\
-                new_thread_marker = malloc(sizeof(thread_marker));  \
-            }\
-            new_thread_marker->wait_count = thread_marker_holder->wait_count -1;\
-            new_thread_marker->is_marker = 0;\
-            for (unsigned int i = 1; i < thread_marker_holder->wait_count; i++){\
-                new_thread_marker->locks[i-1] = thread_marker_holder->locks[i];\
-            }\
-            printf("setting new value malloc\n");\
-        } \
-    }\
-    if (thread_marker_holder != NULL) {\
-        if (thread_marker_holder->is_marker == 0) {\
-            if (thread_marker_holder->locks[0] != NULL &&  thread_marker_holder->wait_count != 0) {\
-                pthread_mutex_unlock(thread_marker_holder->locks[0]);\
-            }\
-            free(thread_marker_holder);\
-        }\
-    }\
-    }\
-})
-*/
 
 static int do_raise(PyThreadState *tstate, PyObject *exc, PyObject *cause);
 static int unpack_iterable(PyThreadState *, PyObject *, int, int, PyObject **);
@@ -1808,7 +1529,7 @@ main_loop:
         case TARGET(STORE_FAST): {
             PREDICTED(STORE_FAST);
             PyObject *value = POP();
-            try_unlock(value);
+            try_unlock(value, tstate);
             //printf(":store-fast-value\n");
             SETLOCAL(oparg, value);
             FAST_DISPATCH();
@@ -1817,7 +1538,7 @@ main_loop:
         case TARGET(POP_TOP): {
             //printf("poping top\n");
             PyObject *value = POP();
-            try_unlock(value);
+            try_unlock(value, tstate);
             //printf(":pop_top\n");
             Py_DECREF(value);
             FAST_DISPATCH();
@@ -1874,7 +1595,7 @@ main_loop:
         case TARGET(UNARY_POSITIVE): {
             PyObject *value = TOP();
             PyObject *res = PyNumber_Positive(value);
-            try_unlock(value);
+            try_unlock(value, tstate);
             Py_DECREF(value);
             SET_TOP(res);
             if (res == NULL)
@@ -1885,7 +1606,7 @@ main_loop:
         case TARGET(UNARY_NEGATIVE): {
             PyObject *value = TOP();
             PyObject *res = PyNumber_Negative(value);
-            try_unlock(value);
+            try_unlock(value, tstate);
             Py_DECREF(value);
             SET_TOP(res);
             if (res == NULL)
@@ -1914,7 +1635,7 @@ main_loop:
         case TARGET(UNARY_INVERT): {
             PyObject *value = TOP();
             PyObject *res = PyNumber_Invert(value);
-            try_unlock(value);
+            try_unlock(value, tstate);
             try_lock(res, tstate);
             Py_DECREF(value);
             SET_TOP(res);
@@ -1927,8 +1648,8 @@ main_loop:
             PyObject *exp = POP();
             PyObject *base = TOP();
             PyObject *res = PyNumber_Power(base, exp, Py_None);
-            try_unlock(exp);
-            try_unlock(base);
+            try_unlock(exp, tstate);
+            try_unlock(base, tstate);
             Py_DECREF(base);
             Py_DECREF(exp);
             SET_TOP(res);
@@ -1941,8 +1662,8 @@ main_loop:
             PyObject *right = POP();
             PyObject *left = TOP();
             PyObject *res = PyNumber_Multiply(left, right);
-            try_unlock(right);
-            try_unlock(left);
+            try_unlock(right, tstate);
+            try_unlock(left, tstate);
             Py_DECREF(left);
             Py_DECREF(right);
             SET_TOP(res);
@@ -1999,8 +1720,8 @@ main_loop:
             } else {
               res = PyNumber_Remainder(dividend, divisor);
             }
-            try_unlock(divisor);
-            try_unlock(dividend);
+            try_unlock(divisor, tstate);
+            try_unlock(dividend, tstate);
             Py_DECREF(divisor);
             Py_DECREF(dividend);
             SET_TOP(res);
@@ -2022,16 +1743,16 @@ main_loop:
             if (PyUnicode_CheckExact(left) &&
                      PyUnicode_CheckExact(right)) {
                 /* this maybe should move into unicode_concatenate */
-                try_unlock(left);
+                try_unlock(left, tstate);
                 sum = unicode_concatenate(tstate, left, right, f, next_instr);
                 /* unicode_concatenate consumed the ref to left */
             }
             else {
                 sum = PyNumber_Add(left, right);
-                try_unlock(left);
+                try_unlock(left, tstate);
                 Py_DECREF(left);
             }
-            try_unlock(right);
+            try_unlock(right, tstate);
             Py_DECREF(right);
             SET_TOP(sum);
             if (sum == NULL)
@@ -2128,7 +1849,7 @@ main_loop:
             PyObject *list = PEEK(oparg);
             int err;
             err = PyList_Append(list, v);
-            try_unlock(v);
+            try_unlock(v, tstate);
             Py_DECREF(v);
             if (err != 0)
                 goto error;
@@ -2141,7 +1862,7 @@ main_loop:
             PyObject *set = PEEK(oparg);
             int err;
             err = PySet_Add(set, v);
-            try_unlock(v);
+            try_unlock(v, tstate);
             Py_DECREF(v);
             if (err != 0)
                 goto error;
@@ -2153,8 +1874,8 @@ main_loop:
             PyObject *exp = POP();
             PyObject *base = TOP();
             PyObject *res = PyNumber_InPlacePower(base, exp, Py_None);
-            try_unlock(base);
-            try_unlock(exp);
+            try_unlock(base, tstate);
+            try_unlock(exp, tstate);
             Py_DECREF(base);
             Py_DECREF(exp);
             SET_TOP(res);
@@ -2322,9 +2043,9 @@ main_loop:
             STACK_SHRINK(3);
             /* container[sub] = v */
             err = PyObject_SetItem(container, sub, v);
-            try_unlock(sub);
-            try_unlock(container);
-            try_unlock(v);
+            try_unlock(sub, tstate);
+            try_unlock(container, tstate);
+            try_unlock(v, tstate);
             Py_DECREF(v);
             Py_DECREF(container);
             Py_DECREF(sub);
@@ -2340,8 +2061,8 @@ main_loop:
             STACK_SHRINK(2);
             /* del container[sub] */
             err = PyObject_DelItem(container, sub);
-            try_unlock(sub);
-            try_unlock(sub);
+            try_unlock(sub, tstate);
+            try_unlock(sub, tstate);
             Py_DECREF(container);
             Py_DECREF(sub);
             if (err != 0)
@@ -2359,15 +2080,15 @@ main_loop:
             if (hook == NULL) {
                 _PyErr_SetString(tstate, PyExc_RuntimeError,
                                  "lost sys.displayhook");
-                try_unlock(value);
+                try_unlock(value, tstate);
                 //printf(": print-expr-value\n");
                 Py_DECREF(value);
                 goto error;
             }
             res = PyObject_CallFunctionObjArgs(hook, value, NULL);
-            try_unlock(hook);
+            try_unlock(hook, tstate);
             //printf(": print-expr-hook\n");
-            try_unlock(value);
+            try_unlock(value, tstate);
             //printf(": print-expr-value\n");
             Py_DECREF(value);
             if (res == NULL)
@@ -2776,7 +2497,7 @@ main_loop:
                 _PyErr_Format(tstate, PyExc_SystemError,
                               "no locals found when storing %R", name);
                 //printf("! ns is null, not unlocking\n");
-                try_unlock(v);
+                try_unlock(v, tstate);
                 //printf(": store-name-v\n");
                 Py_DECREF(v);
                 goto error;
@@ -2785,7 +2506,7 @@ main_loop:
                 err = PyDict_SetItem(ns, name, v);
             else
                 err = PyObject_SetItem(ns, name, v);
-            try_unlock(v);
+            try_unlock(v, tstate);
             //printf(": store-name-v\n");
             // Might need to try locking name space somehow
             Py_DECREF(v);
@@ -2837,11 +2558,11 @@ main_loop:
                 STACK_GROW(oparg);
             } else {
                 /* unpack_iterable() raised an exception */
-                try_unlock(seq);
+                try_unlock(seq, tstate);
                 Py_DECREF(seq);
                 goto error;
             }
-            try_unlock(seq);
+            try_unlock(seq, tstate);
             Py_DECREF(seq);
             DISPATCH();
         }
@@ -2854,11 +2575,11 @@ main_loop:
                                 stack_pointer + totalargs)) {
                 stack_pointer += totalargs;
             } else {
-                try_unlock(seq);
+                try_unlock(seq, tstate);
                 Py_DECREF(seq);
                 goto error;
             }
-            try_unlock(seq);
+            try_unlock(seq, tstate);
             Py_DECREF(seq);
             DISPATCH();
         }
@@ -2870,9 +2591,9 @@ main_loop:
             int err;
             STACK_SHRINK(2);
             err = PyObject_SetAttr(owner, name, v);
-            try_unlock(name);
-            try_unlock(owner);
-            try_unlock(v);
+            try_unlock(name, tstate);
+            try_unlock(owner, tstate);
+            try_unlock(v, tstate);
             Py_DECREF(v);
             Py_DECREF(owner);
             if (err != 0)
@@ -2896,7 +2617,7 @@ main_loop:
             PyObject *v = POP();
             int err;
             err = PyDict_SetItem(f->f_globals, name, v);
-            try_unlock(v);
+            try_unlock(v, tstate);
             Py_DECREF(v);
             if (err != 0)
                 goto error;
@@ -2957,23 +2678,23 @@ main_loop:
                 if (v != NULL) {
                     try_lock(v, tstate);
                     //printf(": load-name-v\n");
-                    try_unlock(f->f_globals);
+                    try_unlock(f->f_globals, tstate);
                     //printf(": load-name-globals\n");
                     Py_INCREF(v);
                 }
                 else if (_PyErr_Occurred(tstate)) {
-                    try_unlock(f->f_globals);
+                    try_unlock(f->f_globals, tstate);
                     //printf(": load-name-globals\n");
                     goto error;
                 }
                 else {
-                    try_unlock(f->f_globals);
+                    try_unlock(f->f_globals, tstate);
                     //printf(": load-name-globals\n");
                     try_lock(f->f_builtins, tstate);
                     //printf(": load-name-builtins\n");
                     if (PyDict_CheckExact(f->f_builtins)) {
                         v = PyDict_GetItemWithError(f->f_builtins, name);
-                        try_unlock(f->f_builtins);
+                        try_unlock(f->f_builtins, tstate);
                         //printf(": load-name-builtins\n");
                         if (v == NULL) {
                             if (!_PyErr_Occurred(tstate)) {
@@ -2989,7 +2710,7 @@ main_loop:
                     }
                     else {
                         v = PyObject_GetItem(f->f_builtins, name);
-                        try_unlock(f->f_builtins);
+                        try_unlock(f->f_builtins, tstate);
                         //printf(": load-name-builtins\n");
                         if (v == NULL) {
                             if (_PyErr_ExceptionMatches(tstate, PyExc_KeyError)) {
@@ -3183,9 +2904,9 @@ main_loop:
             PyObject *cell = freevars[oparg];
             PyObject *oldobj = PyCell_GET(cell);
             PyCell_SET(cell, v);
-            try_unlock(v);
-            try_unlock(cell);
-            try_unlock(oldobj);
+            try_unlock(v, tstate);
+            try_unlock(cell, tstate);
+            try_unlock(oldobj, tstate);
             Py_XDECREF(oldobj);
             DISPATCH();
         }
@@ -3202,7 +2923,7 @@ main_loop:
                 goto error;
             while (--oparg >= 0) {
                 PyObject *item = POP();
-                try_unlock(item);
+                try_unlock(item, tstate);
                 Py_DECREF(item);
             }
             PUSH(str);
@@ -3216,7 +2937,7 @@ main_loop:
             while (--oparg >= 0) {
                 PyObject *item = POP();
                 PyTuple_SET_ITEM(tup, oparg, item);
-                try_unlock(item);
+                try_unlock(item, tstate);
             }
             try_lock(tup, tstate);
             PUSH(tup);
@@ -3230,7 +2951,7 @@ main_loop:
             while (--oparg >= 0) {
                 PyObject *item = POP();
                 PyList_SET_ITEM(list, oparg, item);
-                try_unlock(item);
+                try_unlock(item, tstate);
             }
             try_lock(list, tstate);
             PUSH(list);
@@ -3291,7 +3012,7 @@ main_loop:
                 PyObject *item = PEEK(i);
                 if (err == 0)
                     err = PySet_Add(set, item);
-                try_unlock(item);
+                try_unlock(item, tstate);
                 Py_DECREF(item);
             }
             STACK_SHRINK(oparg);
@@ -3319,7 +3040,7 @@ main_loop:
             PyObject *v;
             while (oparg--){
                 v = POP();
-                try_unlock(v);
+                try_unlock(v, tstate);
                 Py_DECREF(v);
             }
             PUSH(sum);
@@ -3345,8 +3066,8 @@ main_loop:
             while (oparg--) {
                 PyObject * v1 = POP();
                 PyObject * v2 = POP();
-                try_unlock(v1);
-                try_unlock(v2);
+                try_unlock(v1, tstate);
+                try_unlock(v2, tstate);
                 Py_DECREF(v1);
                 Py_DECREF(v2);
             }
@@ -3438,11 +3159,11 @@ main_loop:
                 }
             }
             PyObject * v = POP();
-            try_unlock(v);
+            try_unlock(v, tstate);
             Py_DECREF(v);
             while (oparg--) {
                 v = POP();
-                try_unlock(v);
+                try_unlock(v, tstate);
                 Py_DECREF(v);
             }
             PUSH(map);
@@ -3471,7 +3192,7 @@ main_loop:
             PyObject *v;
             while (oparg--){
                 v = POP();
-                try_unlock(v);
+                try_unlock(v, tstate);
                 Py_DECREF(v);
             }
             PUSH(sum);
@@ -3496,7 +3217,7 @@ main_loop:
             PyObject * v;
             while (oparg--){
                 v = POP();
-                try_unlock(v);
+                try_unlock(v, tstate);
                 Py_DECREF(v);
             }
             PUSH(sum);
@@ -3512,9 +3233,9 @@ main_loop:
             map = PEEK(oparg);                      /* dict */
             assert(PyDict_CheckExact(map));
             err = PyDict_SetItem(map, key, value);  /* map[key] = value */
-            try_unlock(map);
-            try_unlock(value);
-            try_unlock(key);
+            try_unlock(map, tstate);
+            try_unlock(value, tstate);
+            try_unlock(key, tstate);
             Py_DECREF(value);
             Py_DECREF(key);
             if (err != 0)
@@ -3527,7 +3248,7 @@ main_loop:
             PyObject *name = GETITEM(names, oparg);
             PyObject *owner = TOP();
             PyObject *res = PyObject_GetAttr(owner, name);
-            try_unlock(owner);
+            try_unlock(owner, tstate);
             Py_DECREF(owner);
             try_lock(res, tstate);
             SET_TOP(res);
@@ -3540,8 +3261,8 @@ main_loop:
             PyObject *right = POP();
             PyObject *left = TOP();
             PyObject *res = cmp_outcome(tstate, oparg, left, right);
-            try_unlock(left);
-            try_unlock(right);
+            try_unlock(left, tstate);
+            try_unlock(right, tstate);
             Py_DECREF(left);
             Py_DECREF(right);
             SET_TOP(res);
@@ -3558,8 +3279,8 @@ main_loop:
             PyObject *level = TOP();
             PyObject *res;
             res = import_name(tstate, f, name, fromlist, level);
-            try_unlock(level);
-            try_unlock(fromlist);
+            try_unlock(level, tstate);
+            try_unlock(fromlist, tstate);
             Py_DECREF(level);
             Py_DECREF(fromlist);
             SET_TOP(res);
@@ -3585,7 +3306,7 @@ main_loop:
             }
             err = import_all_from(tstate, locals, from);
             PyFrame_LocalsToFast(f, 0);
-            try_unlock(from);
+            try_unlock(from, tstate);
             Py_DECREF(from);
             if (err != 0)
                 goto error;
@@ -3597,7 +3318,7 @@ main_loop:
             PyObject *from = TOP();
             PyObject *res;
             res = import_from(tstate, from, name);
-            try_unlock(from);
+            try_unlock(from, tstate);
             PUSH(res);
             if (res == NULL)
                 goto error;
@@ -3614,18 +3335,18 @@ main_loop:
             PyObject *cond = POP();
             int err;
             if (cond == Py_True) {
-                try_unlock(cond);
+                try_unlock(cond, tstate);
                 Py_DECREF(cond);
                 FAST_DISPATCH();
             }
             if (cond == Py_False) {
-                try_unlock(cond);
+                try_unlock(cond, tstate);
                 Py_DECREF(cond);
                 JUMPTO(oparg);
                 FAST_DISPATCH();
             }
             err = PyObject_IsTrue(cond);
-            try_unlock(cond);
+            try_unlock(cond, tstate);
             Py_DECREF(cond);
             if (err > 0)
                 ;
@@ -3641,18 +3362,18 @@ main_loop:
             PyObject *cond = POP();
             int err;
             if (cond == Py_False) {
-                try_unlock(cond);
+                try_unlock(cond, tstate);
                 Py_DECREF(cond);
                 FAST_DISPATCH();
             }
             if (cond == Py_True) {
-                try_unlock(cond);
+                try_unlock(cond, tstate);
                 Py_DECREF(cond);
                 JUMPTO(oparg);
                 FAST_DISPATCH();
             }
             err = PyObject_IsTrue(cond);
-            try_unlock(cond);
+            try_unlock(cond, tstate);
             Py_DECREF(cond);
             if (err > 0) {
                 JUMPTO(oparg);
@@ -3669,7 +3390,7 @@ main_loop:
             int err;
             if (cond == Py_True) {
                 STACK_SHRINK(1);
-                try_unlock(cond);
+                try_unlock(cond, tstate);
                 Py_DECREF(cond);
                 FAST_DISPATCH();
             }
@@ -3680,7 +3401,7 @@ main_loop:
             err = PyObject_IsTrue(cond);
             if (err > 0) {
                 STACK_SHRINK(1);
-                try_unlock(cond);
+                try_unlock(cond, tstate);
                 Py_DECREF(cond);
             }
             else if (err == 0)
@@ -3695,7 +3416,7 @@ main_loop:
             int err;
             if (cond == Py_False) {
                 STACK_SHRINK(1);
-                try_unlock(cond);
+                try_unlock(cond, tstate);
                 Py_DECREF(cond);
                 FAST_DISPATCH();
             }
@@ -3709,7 +3430,7 @@ main_loop:
             }
             else if (err == 0) {
                 STACK_SHRINK(1);
-                try_unlock(cond);
+                try_unlock(cond, tstate);
                 Py_DECREF(cond);
             }
             else
@@ -3738,7 +3459,7 @@ main_loop:
             /* before: [obj]; after [getiter(obj)] */
             PyObject *iterable = TOP();
             PyObject *iter = PyObject_GetIter(iterable);
-            try_unlock(iterable);
+            try_unlock(iterable, tstate);
             //printf(":iterable\n");
             Py_DECREF(iterable);
             try_lock(iter, tstate);
@@ -3760,7 +3481,7 @@ main_loop:
                 if (!(co->co_flags & (CO_COROUTINE | CO_ITERABLE_COROUTINE))) {
                     /* and it is used in a 'yield from' expression of a
                        regular generator. */
-                    try_unlock(iterable);
+                    try_unlock(iterable, tstate);
                     Py_DECREF(iterable);
                     SET_TOP(NULL);
                     _PyErr_SetString(tstate, PyExc_TypeError,
@@ -3772,7 +3493,7 @@ main_loop:
             else if (!PyGen_CheckExact(iterable)) {
                 /* `iterable` is not a generator. */
                 iter = PyObject_GetIter(iterable);
-                try_unlock(iterable);
+                try_unlock(iterable, tstate);
                 Py_DECREF(iterable);
                 SET_TOP(iter);
                 if (iter == NULL)
@@ -3796,7 +3517,7 @@ main_loop:
                 DISPATCH();
             }
             if (_PyErr_Occurred(tstate)) {
-                try_unlock(iter);
+                try_unlock(iter, tstate);
                 if (!_PyErr_ExceptionMatches(tstate, PyExc_StopIteration)) {
                     goto error;
                 }
@@ -3807,7 +3528,7 @@ main_loop:
             }
             /* iterator ended normally */
             STACK_SHRINK(1);
-            try_unlock(iter);
+            try_unlock(iter, tstate);
             //printf(":iter\n");
             Py_DECREF(iter);
             JUMPBY(oparg);
@@ -3867,17 +3588,17 @@ main_loop:
             PyObject *enter = special_lookup(tstate, mgr, &PyId___enter__);
             PyObject *res;
             if (enter == NULL) {
-                try_unlock(mgr);
+                try_unlock(mgr, tstate);
                 goto error;
             }
             PyObject *exit = special_lookup(tstate, mgr, &PyId___exit__);
             if (exit == NULL) {
-                try_unlock(mgr);
+                try_unlock(mgr, tstate);
                 Py_DECREF(enter);
                 goto error;
             }
             SET_TOP(exit);
-            try_unlock(mgr);
+            try_unlock(mgr, tstate);
             Py_DECREF(mgr);
             res = _PyObject_CallNoArg(enter);
             Py_DECREF(enter);
@@ -4110,7 +3831,7 @@ main_loop:
             res = call_function(tstate, &sp, oparg, names);
             stack_pointer = sp;
             PUSH(res);
-            try_unlock(names);
+            try_unlock(names, tstate);
             Py_DECREF(names);
 
             if (res == NULL) {
@@ -4130,11 +3851,11 @@ main_loop:
                     if (_PyDict_MergeEx(d, kwargs, 2) < 0) {
                         Py_DECREF(d);
                         format_kwargs_error(tstate, SECOND(), kwargs);
-                        try_unlock(kwargs);
+                        try_unlock(kwargs, tstate);
                         Py_DECREF(kwargs);
                         goto error;
                     }
-                    try_unlock(kwargs);
+                    try_unlock(kwargs, tstate);
                     Py_DECREF(kwargs);
                     kwargs = d;
                 }
@@ -4144,7 +3865,7 @@ main_loop:
             func = TOP();
             if (!PyTuple_CheckExact(callargs)) {
                 if (check_args_iterable(tstate, func, callargs) < 0) {
-                    try_unlock(callargs);
+                    try_unlock(callargs, tstate);
                     Py_DECREF(callargs);
                     goto error;
                 }
@@ -4156,9 +3877,9 @@ main_loop:
             assert(PyTuple_CheckExact(callargs));
 
             result = do_call_core(tstate, func, callargs, kwargs);
-            try_unlock(func);
-            try_unlock(callargs);
-            try_unlock(kwargs);
+            try_unlock(func, tstate);
+            try_unlock(callargs, tstate);
+            try_unlock(kwargs, tstate);
             Py_DECREF(func);
             Py_DECREF(callargs);
             Py_XDECREF(kwargs);
@@ -4176,8 +3897,8 @@ main_loop:
             PyFunctionObject *func = (PyFunctionObject *)
                 PyFunction_NewWithQualName(codeobj, f->f_globals, qualname);
 
-            try_unlock(codeobj);
-            try_unlock(qualname);
+            try_unlock(codeobj, tstate);
+            try_unlock(qualname, tstate);
             Py_DECREF(codeobj);
             Py_DECREF(qualname);
             if (func == NULL) {
@@ -4187,22 +3908,22 @@ main_loop:
             if (oparg & 0x08) {
                 assert(PyTuple_CheckExact(TOP()));
                 func ->func_closure = POP();
-                try_unlock(func->func_closure);
+                try_unlock(func->func_closure, tstate);
             }
             if (oparg & 0x04) {
                 assert(PyDict_CheckExact(TOP()));
                 func->func_annotations = POP();
-                try_unlock(func->func_annotations);
+                try_unlock(func->func_annotations, tstate);
             }
             if (oparg & 0x02) {
                 assert(PyDict_CheckExact(TOP()));
                 func->func_kwdefaults = POP();
-                try_unlock(func->func_kwdefaults);
+                try_unlock(func->func_kwdefaults, tstate);
             }
             if (oparg & 0x01) {
                 assert(PyTuple_CheckExact(TOP()));
                 func->func_defaults = POP();
-                try_unlock(func->func_defaults);
+                try_unlock(func->func_defaults, tstate);
             }
 
             PUSH((PyObject *)func);
@@ -4218,9 +3939,9 @@ main_loop:
             stop = POP();
             start = TOP();
             slice = PySlice_New(start, stop, step);
-            try_unlock(start);
-            try_unlock(stop);
-            try_unlock(step);
+            try_unlock(start, tstate);
+            try_unlock(stop, tstate);
+            try_unlock(step, tstate);
             Py_DECREF(start);
             Py_DECREF(stop);
             Py_XDECREF(step);
@@ -4260,7 +3981,7 @@ main_loop:
                without conversion. */
             if (conv_fn != NULL) {
                 result = conv_fn(value);
-                try_unlock(value);
+                try_unlock(value, tstate);
                 Py_DECREF(value);
                 if (result == NULL) {
                     Py_XDECREF(fmt_spec);
@@ -4280,8 +4001,8 @@ main_loop:
             } else {
                 /* Actually call format(). */
                 result = PyObject_Format(value, fmt_spec);
-                try_unlock(value);
-                try_unlock(fmt_spec);
+                try_unlock(value, tstate);
+                try_unlock(fmt_spec, tstate);
                 Py_DECREF(value);
                 Py_XDECREF(fmt_spec);
                 if (result == NULL) {
@@ -4401,7 +4122,7 @@ exit_returning:
     /* Pop remaining stack entries. */
     while (!EMPTY()) {
         PyObject *o = POP();
-        try_unlock(o);
+        try_unlock(o, tstate);
         Py_XDECREF(o);
     }
 
@@ -4429,7 +4150,7 @@ exit_eval_frame:
     f->f_executing = 0;
     tstate->frame = f->f_back;
 
-    try_unlock(retval);
+    try_unlock(retval, tstate);
     return _Py_CheckFunctionResult(NULL, retval, "PyEval_EvalFrameEx");
 }
 
@@ -5609,7 +5330,7 @@ call_function(PyThreadState *tstate, PyObject ***pp_stack, Py_ssize_t oparg, PyO
     /* Clear the stack of the function object. */
     while ((*pp_stack) > pfunc) {
         w = EXT_POP(*pp_stack);
-        try_unlock(w);
+        try_unlock(w, tstate);
         Py_DECREF(w);
     }
 

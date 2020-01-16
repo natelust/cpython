@@ -6,13 +6,15 @@
 
 # define NUMBER_THREADS_CXE 10000
 
+typedef struct _ts PyThreadState;
+
 typedef struct thread_marker {
     int64_t wait_count;
     PyThreadState *locks[NUMBER_THREADS_CXE];
 } thread_marker;
 
 typedef struct multi_thread {
-    _Bool upgrade
+    _Bool upgrade;
 } multi_thread;
 
 #endif

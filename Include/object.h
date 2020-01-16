@@ -97,6 +97,9 @@ whose size is determined when the object is allocated.
 #define PyObject_VAR_HEAD      PyVarObject ob_base;
 #define Py_INVALID_SIZE (Py_ssize_t)-1
 
+typedef struct _ts PyThreadState;
+PyAPI_FUNC(PyThreadState *) PyGILState_GetThisThreadState(void);
+
 /* Nothing is actually declared to be a PyObject, but every pointer to
  * a Python object can be cast to a PyObject*.  This is inheritance built
  * by hand.  Similarly every pointer to a variable-size Python object can,
@@ -110,6 +113,8 @@ typedef struct _object {
     _Atomic multi_thread * request;
     atomic_bool thread_lock;
     PyThreadState * owner_thread;
+    thread_marker * thread_queue;
+    uintptr_t current_thread;
 } PyObject;
 
 /* Cast argument to PyObject* type. */
@@ -448,7 +453,7 @@ static inline void _Py_NewReference(PyObject *op)
     Py_REFCNT(op) = 1;
     
     op->in_flight_count = 0;
-    op->owner_thread = _PyRuntimeState_GetThreadState();
+    op->owner_thread = PyGILState_GetThisThreadState();
 }
 
 static inline void _Py_ForgetReference(PyObject *op)
