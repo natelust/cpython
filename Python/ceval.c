@@ -722,33 +722,16 @@ _Py_CheckRecursiveCall(const char *where)
 //#define try_lock(obj) ({\
 
 static _Atomic multi_thread request_thread_lock = {.upgrade =1};
+static multi_thread * request_thread_lock_ptr = &request_thread_lock;
 static _Atomic multi_thread multi_state = {.upgrade =1};
+static _Atomic multi_thread * multi_state_ptr = &multi_state;
 
 void try_lock(PyObject * obj, PyThreadState * tstate){
 lock_start:
     if (obj == NULL) {
         return;
     }
-    if (atomic_load_explicit(&obj->request, memory_order_relaxed) == &multi_state) {
-        while(atomic_exchange_explicit(&obj->thread_lock, 1, memory_order_relaxed));
-        if (obj->thread_queue == NULL) {
-            obj->thread_queue = (thread_marker *) malloc(sizeof(thread_marker));
-            obj->thread_queue->wait_count = -1;
-        }
-        if ((uintptr_t) tstate == obj->current_thread) {
-            obj->thread_queue->wait_count++;
-            obj->thread_queue->locks[obj->thread_queue->wait_count] = NULL;
-            atomic_store_explicit(&obj->thread_lock, 0, memory_order_relaxed);
-        } else {
-            // the object is currently being used in another thread, add to the queue
-            obj->thread_queue->wait_count++;
-            obj->thread_queue->locks[obj->thread_queue->wait_count] = tstate;
-            pthread_mutex_lock(&tstate->thread_lock);
-            atomic_store_explicit(&obj->thread_lock, 0, memory_order_relaxed);
-            pthread_mutex_lock(&tstate->thread_lock);
-            pthread_mutex_unlock(&(tstate->thread_lock));
-        }
-    } else {
+    if (atomic_load_explicit(&obj->request, memory_order_relaxed) != multi_state_ptr) {
         PyThreadState * owner_thread = obj->owner_thread;
         if (owner_thread == NULL) {
             // I dont understand how this is, _Py_NewReference seems to not be called
@@ -759,7 +742,7 @@ lock_start:
         } else {
             // Lock and insert into the tstate
             while(atomic_exchange_explicit(&owner_thread->tstate_lock, 1, memory_order_relaxed));
-            if (atomic_load_explicit(&obj->request, memory_order_relaxed) == &multi_state){
+            if (atomic_load_explicit(&obj->request, memory_order_relaxed) == multi_state_ptr){
                 // This was converted to a multi thread var while waiting for the lock
                 // go back at start again
                 atomic_store_explicit(&owner_thread->tstate_lock, 0, memory_order_relaxed);
@@ -767,7 +750,7 @@ lock_start:
             }
 
             // Request that this variable be upgraded
-            atomic_store_explicit(&obj->request, &request_thread_lock, memory_order_relaxed);
+            atomic_store_explicit(&obj->request, request_thread_lock_ptr, memory_order_relaxed);
 
             size_t i;
             for (i = 0; i < NUMBER_THREADS_CXE; i++) {
@@ -792,6 +775,25 @@ lock_start:
             pthread_mutex_lock(&tstate->thread_lock);
             pthread_mutex_unlock(&(tstate->thread_lock));
         }
+    } else {
+        while(atomic_exchange_explicit(&obj->thread_lock, 1, memory_order_relaxed));
+        if (obj->thread_queue == NULL) {
+            obj->thread_queue = (thread_marker *) malloc(sizeof(thread_marker));
+            obj->thread_queue->wait_count = -1;
+        }
+        if ((uintptr_t) tstate == obj->current_thread) {
+            obj->thread_queue->wait_count++;
+            obj->thread_queue->locks[obj->thread_queue->wait_count] = NULL;
+            atomic_store_explicit(&obj->thread_lock, 0, memory_order_relaxed);
+        } else {
+            // the object is currently being used in another thread, add to the queue
+            obj->thread_queue->wait_count++;
+            obj->thread_queue->locks[obj->thread_queue->wait_count] = tstate;
+            pthread_mutex_lock(&tstate->thread_lock);
+            atomic_store_explicit(&obj->thread_lock, 0, memory_order_relaxed);
+            pthread_mutex_lock(&tstate->thread_lock);
+            pthread_mutex_unlock(&(tstate->thread_lock));
+        }
     }
 }
 
@@ -799,38 +801,15 @@ void try_unlock(PyObject * obj, PyThreadState * tstate){
     if (obj == NULL) {
         return;
     }
-    if (atomic_load_explicit(&obj->request, memory_order_relaxed) == &multi_state) {
-        while(atomic_exchange_explicit(&obj->thread_lock, 1, memory_order_relaxed));
-        if (obj->thread_queue == NULL) {
-            // got here somehow, nothing to do just return
-            atomic_store_explicit(&obj->thread_lock, 0, memory_order_relaxed);
-            return;
-        }
-        // grab the first thing to unlock
-        PyThreadState * mutex = obj->thread_queue->locks[0];
-        // bring the wait count down since the bottom was taken
-        obj->thread_queue->wait_count--;
-        if (obj->thread_queue->wait_count < 0) {
-            free(obj->thread_queue);
-            obj->thread_queue = NULL;
-        } else {
-            // need to move all the locks down
-            for (size_t i = 1; i<=(obj->thread_queue->wait_count+1); i++) {
-                obj->thread_queue->locks[i-1] = obj->thread_queue->locks[i];
-            }
-        }
-        if (mutex != NULL) {
-            obj->current_thread = (uintptr_t) mutex;
-            pthread_mutex_unlock(&mutex->thread_lock);
-        }
-        atomic_store_explicit(&obj->thread_lock, 0, memory_order_relaxed);
-    } else {
+    _Atomic multi_thread ** deref_obj = &obj->request;
+    multi_thread * current_multi_state = atomic_load_explicit(deref_obj, memory_order_relaxed);
+    if (current_multi_state != multi_state_ptr) {
         PyThreadState * owner_thread = obj->owner_thread;
         if (tstate == owner_thread){
             obj->in_flight_count--;
         } else {
             if (obj->in_flight_count == 0) {
-                if (atomic_load_explicit(&obj->request, memory_order_relaxed) == &request_thread_lock) {
+                if (atomic_load_explicit(&obj->request, memory_order_relaxed) == request_thread_lock_ptr) {
                     // Lock and read from the tstate
                     while(atomic_exchange_explicit(&owner_thread->tstate_lock, 1, memory_order_relaxed));
 
@@ -867,6 +846,31 @@ void try_unlock(PyObject * obj, PyThreadState * tstate){
                 }
             }
         }
+    } else {
+        while(atomic_exchange_explicit(&obj->thread_lock, 1, memory_order_relaxed));
+        if (obj->thread_queue == NULL) {
+            // got here somehow, nothing to do just return
+            atomic_store_explicit(&obj->thread_lock, 0, memory_order_relaxed);
+            return;
+        }
+        // grab the first thing to unlock
+        PyThreadState * mutex = obj->thread_queue->locks[0];
+        // bring the wait count down since the bottom was taken
+        obj->thread_queue->wait_count--;
+        if (obj->thread_queue->wait_count < 0) {
+            free(obj->thread_queue);
+            obj->thread_queue = NULL;
+        } else {
+            // need to move all the locks down
+            for (size_t i = 1; i<=(obj->thread_queue->wait_count+1); i++) {
+                obj->thread_queue->locks[i-1] = obj->thread_queue->locks[i];
+            }
+        }
+        if (mutex != NULL) {
+            obj->current_thread = (uintptr_t) mutex;
+            pthread_mutex_unlock(&mutex->thread_lock);
+        }
+        atomic_store_explicit(&obj->thread_lock, 0, memory_order_relaxed);
     }
 
 }
