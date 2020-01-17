@@ -195,24 +195,24 @@ take_gil(struct _ceval_runtime_state *ceval, PyThreadState *tstate)
         goto _ready;
     }
 
-    while (_Py_atomic_load_relaxed(&gil->locked)) {
-        int timed_out = 0;
-        unsigned long saved_switchnum;
+    //while (_Py_atomic_load_relaxed(&gil->locked)) {
+    //    int timed_out = 0;
+    //    unsigned long saved_switchnum;
 
-        saved_switchnum = gil->switch_number;
+    //    saved_switchnum = gil->switch_number;
 
 
-        unsigned long interval = (gil->interval >= 1 ? gil->interval : 1);
-        //COND_TIMED_WAIT(gil->cond, gil->mutex, interval, timed_out);
-        /* If we timed out and no switch occurred in the meantime, it is time
-           to ask the GIL-holding thread to drop it. */
-        if (timed_out &&
-            _Py_atomic_load_relaxed(&gil->locked) &&
-            gil->switch_number == saved_switchnum)
-        {
-            //SET_GIL_DROP_REQUEST(ceval);
-        }
-    }
+    //    unsigned long interval = (gil->interval >= 1 ? gil->interval : 1);
+    //    //COND_TIMED_WAIT(gil->cond, gil->mutex, interval, timed_out);
+    //    /* If we timed out and no switch occurred in the meantime, it is time
+    //       to ask the GIL-holding thread to drop it. */
+    //    if (timed_out &&
+    //        _Py_atomic_load_relaxed(&gil->locked) &&
+    //        gil->switch_number == saved_switchnum)
+    //    {
+    //        //SET_GIL_DROP_REQUEST(ceval);
+    //    }
+    //}
 _ready:
 #ifdef FORCE_SWITCHING
     /* This mutex must be taken before modifying gil->last_holder:

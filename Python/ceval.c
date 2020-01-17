@@ -737,7 +737,9 @@ lock_start:
         } else {
             printf("%p - the owner thread is %p\n", obj, owner_thread);
             // Lock and insert into the tstate
-            while(atomic_exchange_explicit(&owner_thread->tstate_lock, 1, memory_order_relaxed));
+            while(atomic_exchange_explicit(&owner_thread->tstate_lock, 1, memory_order_relaxed)){
+                printf("%p - spinning in lock - %p", obj, tstate);
+            }
             if (atomic_load_explicit(&obj->request, memory_order_relaxed) == multi_state_ptr){
                 // This was converted to a multi thread var while waiting for the lock
                 // go back at start again
@@ -778,7 +780,10 @@ lock_start:
         }
     } else {
         printf("%p - lock multivariable getting lock\n", obj);
-        while(atomic_exchange_explicit(&obj->thread_lock, 1, memory_order_relaxed));
+        while(atomic_exchange_explicit(&obj->thread_lock, 1, memory_order_relaxed)){
+                printf("%p - spinning in lock - %p", obj, tstate);
+            }
+
         printf("%p - lock multivariable have lock\n", obj);
         if (obj->thread_queue == NULL) {
             obj->thread_queue = (thread_marker *) malloc(sizeof(thread_marker));
@@ -807,16 +812,19 @@ void try_unlock(PyObject * obj, PyThreadState * tstate){
     }
     */
     if (atomic_load_explicit(&obj->request, memory_order_relaxed) != multi_state_ptr) {
+        //printf("%p - unlocking %p\n", obj, tstate);
         PyThreadState * owner_thread = obj->owner_thread;
         if (tstate == owner_thread){
             //printf("%p - unlocking\n", obj);
             obj->in_flight_count--;
             if (obj->in_flight_count == 0) {
-                printf("%p - upgrading\n", obj);
+                //printf("%p - upgrading\n", obj);
                 if (atomic_load_explicit(&obj->request, memory_order_relaxed) == request_thread_lock_ptr) {
                     printf("%p - there is an upgrade request\n", obj);
                     // Lock and read from the tstate
-                    while(atomic_exchange_explicit(&owner_thread->tstate_lock, 1, memory_order_relaxed));
+                    while(atomic_exchange_explicit(&owner_thread->tstate_lock, 1, memory_order_relaxed)){
+                        printf("%p - spinning in lock - %p", obj, tstate);
+                    }
 
                     // find the pyobject marker
                     size_t i;
@@ -854,7 +862,9 @@ void try_unlock(PyObject * obj, PyThreadState * tstate){
         }
     } else {
         printf("%p - unlock multivariable getting lock\n", obj);
-        while(atomic_exchange_explicit(&obj->thread_lock, 1, memory_order_relaxed));
+        while(atomic_exchange_explicit(&obj->thread_lock, 1, memory_order_relaxed)){
+                        printf("%p - spinning in lock - %p", obj, tstate);
+                    }
         printf("%p - unlock multivariable have lock\n", obj);
         if (obj->thread_queue == NULL) {
             // got here somehow, nothing to do just return
