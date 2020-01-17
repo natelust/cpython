@@ -734,7 +734,10 @@ lock_start:
         }
         if (tstate == owner_thread){
             obj->in_flight_count++;
-        } else {
+        } else if (owner_thread == NULL){
+            return;
+        } 
+        else {
             printf("%p - the owner thread is %p\n", obj, owner_thread);
             // Lock and insert into the tstate
             while(atomic_exchange_explicit(&owner_thread->tstate_lock, 1, memory_order_relaxed)){
@@ -875,7 +878,7 @@ void try_unlock(PyObject * obj, PyThreadState * tstate){
         PyThreadState * mutex = obj->thread_queue->locks[0];
         // bring the wait count down since the bottom was taken
         obj->thread_queue->wait_count--;
-        if (obj->thread_queue->wait_count < 0) {
+        if (obj->thread_queue->wait_count < 0 && obj->thread_queue != NULL) {
             free(obj->thread_queue);
             obj->thread_queue = NULL;
         } else {
@@ -1587,6 +1590,7 @@ main_loop:
         case TARGET(LOAD_CONST): {
             PREDICTED(LOAD_CONST);
             PyObject *value = GETITEM(consts, oparg);
+            value->owner_thread = NULL;
             Py_INCREF(value);
             PUSH(value);
             FAST_DISPATCH();
@@ -3580,7 +3584,9 @@ main_loop:
             PyObject *iter = TOP();
             PyObject *next = (*iter->ob_type->tp_iternext)(iter);
             if (next != NULL) {
-                try_lock(next, tstate);
+                //printf("before for lock\n");
+                //printf("owned by %p\n", next->owner_thread);
+                //try_lock(next, tstate);
                 //printf(":next\n");
                 PUSH(next);
                 PREDICT(STORE_FAST);

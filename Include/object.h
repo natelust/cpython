@@ -454,6 +454,7 @@ static inline void _Py_NewReference(PyObject *op)
     
     op->in_flight_count = 0;
     op->owner_thread = PyGILState_GetThisThreadState();
+    //printf("%p - owner is %p\n", op, op->owner_thread);
 }
 
 static inline void _Py_ForgetReference(PyObject *op)
