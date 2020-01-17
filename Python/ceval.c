@@ -44,9 +44,6 @@ extern int _PyObject_GetMethod(PyObject *, PyObject *, PyObject **);
 
 typedef PyObject *(*callproc)(PyObject *, PyObject *, PyObject *);
 
-//inline void try_lock(PyObject * , PyThreadState *, thread_marker * );
-//inline void try_unlock(PyObject *, thread_barrier * );
-
 /* Forward declarations */
 Py_LOCAL_INLINE(PyObject *) call_function(
     PyThreadState *tstate, PyObject ***pp_stack,
@@ -715,11 +712,6 @@ _Py_CheckRecursiveCall(const char *where)
     return 0;
 }
 
-//#include <time.h>
-//inline void try_lock(PyObject * obj, PyThreadState *tstate, thread_marker * current_thread_marker){
-    //printf("lock %p from %p\n", (void *)obj, (void *) current_thread_marker->thread_marker_pointer);
-
-//#define try_lock(obj) ({\
 
 static multi_thread request_thread_lock = {.upgrade=1}; 
 static multi_thread * request_thread_lock_ptr = &request_thread_lock;
@@ -729,9 +721,11 @@ static multi_thread * multi_state_ptr = &multi_state;
 
 void try_lock(PyObject * obj, PyThreadState * tstate){
 lock_start:
+/*
     if (obj == NULL) {
         return;
     }
+    */
     if (atomic_load_explicit(&obj->request, memory_order_relaxed) != multi_state_ptr) {
         PyThreadState * owner_thread = obj->owner_thread;
         if (owner_thread == NULL) {
@@ -800,9 +794,11 @@ lock_start:
 }
 
 void try_unlock(PyObject * obj, PyThreadState * tstate){
+    /*
     if (obj == NULL) {
         return;
     }
+    */
     if (atomic_load_explicit(&obj->request, memory_order_relaxed) != multi_state_ptr) {
         PyThreadState * owner_thread = obj->owner_thread;
         if (tstate == owner_thread){
@@ -2679,7 +2675,6 @@ main_loop:
                         goto error;
                     _PyErr_Clear(tstate);
                 }
-                try_lock(v, tstate);
                 //printf(": load-name-v\n");
             }
             if (v == NULL) {
@@ -2735,6 +2730,8 @@ main_loop:
                         //printf(": load-name-v\n");
                     }
                 }
+            } else {
+                try_lock(v, tstate);
             }
             PUSH(v);
             DISPATCH();
@@ -2917,7 +2914,9 @@ main_loop:
             PyCell_SET(cell, v);
             try_unlock(v, tstate);
             try_unlock(cell, tstate);
-            try_unlock(oldobj, tstate);
+            if (oldobj != NULL) {
+                try_unlock(oldobj, tstate);
+            }
             Py_XDECREF(oldobj);
             DISPATCH();
         }
@@ -3261,7 +3260,9 @@ main_loop:
             PyObject *res = PyObject_GetAttr(owner, name);
             try_unlock(owner, tstate);
             Py_DECREF(owner);
-            try_lock(res, tstate);
+            if (res != NULL) {
+                try_lock(res, tstate);
+            }
             SET_TOP(res);
             if (res == NULL)
                 goto error;
@@ -3890,7 +3891,9 @@ main_loop:
             result = do_call_core(tstate, func, callargs, kwargs);
             try_unlock(func, tstate);
             try_unlock(callargs, tstate);
-            try_unlock(kwargs, tstate);
+            if (kwargs != NULL){
+                try_unlock(kwargs, tstate);
+            }
             Py_DECREF(func);
             Py_DECREF(callargs);
             Py_XDECREF(kwargs);
@@ -3952,7 +3955,9 @@ main_loop:
             slice = PySlice_New(start, stop, step);
             try_unlock(start, tstate);
             try_unlock(stop, tstate);
-            try_unlock(step, tstate);
+            if (step != NULL) {
+                try_unlock(step, tstate);
+            }
             Py_DECREF(start);
             Py_DECREF(stop);
             Py_XDECREF(step);
@@ -4013,7 +4018,9 @@ main_loop:
                 /* Actually call format(). */
                 result = PyObject_Format(value, fmt_spec);
                 try_unlock(value, tstate);
-                try_unlock(fmt_spec, tstate);
+                if (fmt_spec != NULL) {
+                    try_unlock(fmt_spec, tstate);
+                }
                 Py_DECREF(value);
                 Py_XDECREF(fmt_spec);
                 if (result == NULL) {
@@ -4133,7 +4140,9 @@ exit_returning:
     /* Pop remaining stack entries. */
     while (!EMPTY()) {
         PyObject *o = POP();
-        try_unlock(o, tstate);
+        if (o != NULL) {
+            try_unlock(o, tstate);
+        }
         Py_XDECREF(o);
     }
 
