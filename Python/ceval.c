@@ -727,26 +727,25 @@ lock_start:
     }
     */
     if (atomic_load_explicit(&obj->request, memory_order_relaxed) != multi_state_ptr) {
-        PyThreadState * owner_thread = obj->owner_thread;
-        if (owner_thread == NULL) {
+        if (obj->owner_thread == NULL) {
             // I dont understand how this is, _Py_NewReference seems to not be called
             return;
         }
-        if (tstate == owner_thread){
+        if (tstate == obj->owner_thread){
             obj->in_flight_count++;
-        } else if (owner_thread == NULL){
+        } else if (obj->owner_thread == NULL){
             return;
         } 
         else {
-            printf("%p - the owner thread is %p\n", obj, owner_thread);
+            printf("%p - the owner thread is %p\n", obj, obj->owner_thread);
             // Lock and insert into the tstate
-            while(atomic_exchange_explicit(&owner_thread->tstate_lock, 1, memory_order_relaxed)){
+            while(atomic_exchange_explicit(&obj->owner_thread->tstate_lock, 1, memory_order_relaxed)){
                 printf("%p - spinning in lock - %p", obj, tstate);
             }
             if (atomic_load_explicit(&obj->request, memory_order_relaxed) == multi_state_ptr){
                 // This was converted to a multi thread var while waiting for the lock
                 // go back at start again
-                atomic_store_explicit(&owner_thread->tstate_lock, 0, memory_order_relaxed);
+                atomic_store_explicit(&obj->owner_thread->tstate_lock, 0, memory_order_relaxed);
                 printf("%p - goto\n", obj);
                 goto lock_start;
             }
@@ -757,24 +756,24 @@ lock_start:
 
             size_t i;
             for (i = 0; i < NUMBER_THREADS_CXE; i++) {
-                if (owner_thread->pyobject_locator[i] == obj) {
+                if (obj->owner_thread->pyobject_locator[i] == obj) {
                     break;
                 }
             }
             if (i == NUMBER_THREADS_CXE) {
                 // find a place to put it
                 for (i = 0; i < NUMBER_THREADS_CXE; i++) {
-                    if (owner_thread->pyobject_locator[i] == NULL) {
+                    if (obj->owner_thread->pyobject_locator[i] == NULL) {
                         break;
                     }
                 }
-                owner_thread->pyobject_locator[i] = obj;
-                owner_thread->num_pyobject_markers++;
+                obj->owner_thread->pyobject_locator[i] = obj;
+                obj->owner_thread->num_pyobject_markers++;
             }
-            owner_thread->marker_locator[i].wait_count++;
-            owner_thread->marker_locator[i].locks[owner_thread->marker_locator[i].wait_count] = tstate;
+            obj->owner_thread->marker_locator[i].wait_count++;
+            obj->owner_thread->marker_locator[i].locks[obj->owner_thread->marker_locator[i].wait_count] = tstate;
             
-            atomic_store_explicit(&owner_thread->tstate_lock, 0, memory_order_relaxed);
+            atomic_store_explicit(&obj->owner_thread->tstate_lock, 0, memory_order_relaxed);
             pthread_mutex_lock(&tstate->thread_lock);
             printf("%p - mutex locked %p\n", obj, tstate);
             pthread_mutex_lock(&tstate->thread_lock);
@@ -814,29 +813,28 @@ void try_unlock(PyObject * obj, PyThreadState * tstate){
         return;
     }
     */
-    if (atomic_load_explicit(&obj->request, memory_order_relaxed) != multi_state_ptr) {
+    if (&obj->in_flight_count != 0) {
         //printf("%p - unlocking %p\n", obj, tstate);
-        PyThreadState * owner_thread = obj->owner_thread;
-        if (tstate == owner_thread){
+        if (tstate == obj->owner_thread){
             //printf("%p - unlocking\n", obj);
             obj->in_flight_count--;
-            if (obj->in_flight_count == 0) {
-                //printf("%p - upgrading\n", obj);
-                if (atomic_load_explicit(&obj->request, memory_order_relaxed) == request_thread_lock_ptr) {
+            if (obj->in_flight_count != 0) {
+                return;
+            } else if (atomic_load_explicit(&obj->request, memory_order_relaxed) == request_thread_lock_ptr) {
                     printf("%p - there is an upgrade request\n", obj);
                     // Lock and read from the tstate
-                    while(atomic_exchange_explicit(&owner_thread->tstate_lock, 1, memory_order_relaxed)){
+                    while(atomic_exchange_explicit(&obj->owner_thread->tstate_lock, 1, memory_order_relaxed)){
                         printf("%p - spinning in lock - %p", obj, tstate);
                     }
 
                     // find the pyobject marker
                     size_t i;
                     for (i = 0; i < NUMBER_THREADS_CXE; i++) {
-                        if (owner_thread->pyobject_locator[i] == obj) {
+                        if (obj->owner_thread->pyobject_locator[i] == obj) {
                             break;
                         }
                     }
-                    thread_marker * marker = &owner_thread->marker_locator[i];   
+                    thread_marker * marker = &obj->owner_thread->marker_locator[i];   
                     // copy all the thread marker into a new marker and clear the tstate
                     thread_marker * new_marker = (thread_marker *) malloc(sizeof(thread_marker));
                     new_marker->wait_count = marker->wait_count;
@@ -848,8 +846,8 @@ void try_unlock(PyObject * obj, PyThreadState * tstate){
                     // reset the marker in the thread object so it can be reused
                     marker->wait_count = -1;
                     // clear the pyobject on the tstate queue
-                    owner_thread->pyobject_locator[i] = NULL;
-                    owner_thread->num_pyobject_markers--;
+                    obj->owner_thread->pyobject_locator[i] = NULL;
+                    obj->owner_thread->num_pyobject_markers--;
                     // set the new marker on the object
                     obj->thread_queue = new_marker;
                     obj->current_thread = (uintptr_t) &marker->locks[0];
@@ -858,12 +856,15 @@ void try_unlock(PyObject * obj, PyThreadState * tstate){
                     // unlock the waiting mutex
                     pthread_mutex_unlock(lock);
                     // unlock the tstate lock
-                    atomic_store_explicit(&owner_thread->tstate_lock, 0, memory_order_relaxed);
+                    atomic_store_explicit(&obj->owner_thread->tstate_lock, 0, memory_order_relaxed);
                     // should be in a multi thread variable
-                }
+                
             }
         }
     } else {
+        if (atomic_load_explicit(&obj->request, memory_order_relaxed) != multi_state_ptr) {
+            return;
+        }
         printf("%p - unlock multivariable getting lock\n", obj);
         while(atomic_exchange_explicit(&obj->thread_lock, 1, memory_order_relaxed)){
                         printf("%p - spinning in lock - %p", obj, tstate);
