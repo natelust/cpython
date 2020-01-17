@@ -110,7 +110,7 @@ typedef struct _object {
     Py_ssize_t ob_refcnt;
     struct _typeobject *ob_type;
     Py_ssize_t in_flight_count;
-    _Atomic multi_thread * request;
+    _Atomic (multi_thread *) request;
     atomic_bool thread_lock;
     PyThreadState * owner_thread;
     thread_marker * thread_queue;

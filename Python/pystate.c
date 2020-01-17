@@ -690,6 +690,7 @@ _PyThreadState_Init(_PyRuntimeState *runtime, PyThreadState *tstate)
         memset(&tmp.locks, 0, NUMBER_THREADS_CXE*sizeof(PyThreadState *));
         tstate->marker_locator[i] = tmp;
     }
+    tstate->num_pyobject_markers = 0;
 
     _PyGILState_NoteThreadState(&runtime->gilstate, tstate);
 }

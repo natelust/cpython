@@ -144,6 +144,7 @@ struct _ts {
 
     /* Unique thread state id. */
     uint64_t id;
+    uint64_t num_pyobject_markers;
     pthread_mutex_t thread_lock;
     PyObject * pyobject_locator[NUMBER_THREADS_CXE];
     thread_marker marker_locator[NUMBER_THREADS_CXE];

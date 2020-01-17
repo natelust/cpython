@@ -721,10 +721,11 @@ _Py_CheckRecursiveCall(const char *where)
 
 //#define try_lock(obj) ({\
 
-static _Atomic multi_thread request_thread_lock = {.upgrade =1};
+static multi_thread request_thread_lock = {.upgrade=1}; 
 static multi_thread * request_thread_lock_ptr = &request_thread_lock;
-static _Atomic multi_thread multi_state = {.upgrade =1};
-static _Atomic multi_thread * multi_state_ptr = &multi_state;
+
+static multi_thread multi_state = {.upgrade=1};
+static multi_thread * multi_state_ptr = &multi_state;
 
 void try_lock(PyObject * obj, PyThreadState * tstate){
 lock_start:
@@ -766,6 +767,7 @@ lock_start:
                     }
                 }
                 owner_thread->pyobject_locator[i] = obj;
+                owner_thread->num_pyobject_markers++;
             }
             owner_thread->marker_locator[i].wait_count++;
             owner_thread->marker_locator[i].locks[owner_thread->marker_locator[i].wait_count] = tstate;
@@ -801,9 +803,7 @@ void try_unlock(PyObject * obj, PyThreadState * tstate){
     if (obj == NULL) {
         return;
     }
-    _Atomic multi_thread ** deref_obj = &obj->request;
-    multi_thread * current_multi_state = atomic_load_explicit(deref_obj, memory_order_relaxed);
-    if (current_multi_state != multi_state_ptr) {
+    if (atomic_load_explicit(&obj->request, memory_order_relaxed) != multi_state_ptr) {
         PyThreadState * owner_thread = obj->owner_thread;
         if (tstate == owner_thread){
             obj->in_flight_count--;
@@ -833,6 +833,7 @@ void try_unlock(PyObject * obj, PyThreadState * tstate){
                     marker->wait_count = -1;
                     // clear the pyobject on the tstate queue
                     owner_thread->pyobject_locator[i] = NULL;
+                    owner_thread->num_pyobject_markers--;
                     // set the new marker on the object
                     obj->thread_queue = new_marker;
                     obj->current_thread = (uintptr_t) &marker->locks[0];
@@ -873,6 +874,12 @@ void try_unlock(PyObject * obj, PyThreadState * tstate){
         atomic_store_explicit(&obj->thread_lock, 0, memory_order_relaxed);
     }
 
+}
+
+void check_thread_markers(PyThreadState * tstate) {
+    if (tstate->num_pyobject_markers == 0){
+        return;
+    }
 }
 
 static int do_raise(PyThreadState *tstate, PyObject *exc, PyObject *cause);
@@ -4154,7 +4161,8 @@ exit_eval_frame:
     f->f_executing = 0;
     tstate->frame = f->f_back;
 
-    try_unlock(retval, tstate);
+    //try_unlock(retval, tstate);
+    check_thread_markers(tstate);
     return _Py_CheckFunctionResult(NULL, retval, "PyEval_EvalFrameEx");
 }
 
