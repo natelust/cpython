@@ -681,7 +681,7 @@ _PyThreadState_Init(_PyRuntimeState *runtime, PyThreadState *tstate)
     thread_marker * tmp = get_thread_marker_key();
     tstate->current_thread_marker = tmp;
     pthread_mutex_init(&tstate->thread_lock, NULL);
-    printf("the mutex i %p\n", &tstate->thread_lock);
+    printf("the mutex i %p\n", tstate);
     atomic_store_explicit(&tstate->tstate_lock, 0, memory_order_relaxed);
     memset(&tstate->pyobject_locator, 0, NUMBER_THREADS_CXE*sizeof(PyObject *));
     for (size_t i = 0; i< NUMBER_THREADS_CXE; i++) {

@@ -735,17 +735,20 @@ lock_start:
         if (tstate == owner_thread){
             obj->in_flight_count++;
         } else {
+            printf("%p - the owner thread is %p\n", obj, owner_thread);
             // Lock and insert into the tstate
             while(atomic_exchange_explicit(&owner_thread->tstate_lock, 1, memory_order_relaxed));
             if (atomic_load_explicit(&obj->request, memory_order_relaxed) == multi_state_ptr){
                 // This was converted to a multi thread var while waiting for the lock
                 // go back at start again
                 atomic_store_explicit(&owner_thread->tstate_lock, 0, memory_order_relaxed);
+                printf("%p - goto\n", obj);
                 goto lock_start;
             }
 
             // Request that this variable be upgraded
             atomic_store_explicit(&obj->request, request_thread_lock_ptr, memory_order_relaxed);
+            printf("%p - requesting upgrade %p\n", obj, tstate);
 
             size_t i;
             for (i = 0; i < NUMBER_THREADS_CXE; i++) {
@@ -766,13 +769,17 @@ lock_start:
             owner_thread->marker_locator[i].wait_count++;
             owner_thread->marker_locator[i].locks[owner_thread->marker_locator[i].wait_count] = tstate;
             
-            pthread_mutex_lock(&tstate->thread_lock);
             atomic_store_explicit(&owner_thread->tstate_lock, 0, memory_order_relaxed);
             pthread_mutex_lock(&tstate->thread_lock);
+            printf("%p - mutex locked %p\n", obj, tstate);
+            pthread_mutex_lock(&tstate->thread_lock);
+            printf("%p - mutex unlocked\n", obj);
             pthread_mutex_unlock(&(tstate->thread_lock));
         }
     } else {
+        printf("%p - lock multivariable getting lock\n", obj);
         while(atomic_exchange_explicit(&obj->thread_lock, 1, memory_order_relaxed));
+        printf("%p - lock multivariable have lock\n", obj);
         if (obj->thread_queue == NULL) {
             obj->thread_queue = (thread_marker *) malloc(sizeof(thread_marker));
             obj->thread_queue->wait_count = -1;
@@ -802,10 +809,12 @@ void try_unlock(PyObject * obj, PyThreadState * tstate){
     if (atomic_load_explicit(&obj->request, memory_order_relaxed) != multi_state_ptr) {
         PyThreadState * owner_thread = obj->owner_thread;
         if (tstate == owner_thread){
+            //printf("%p - unlocking\n", obj);
             obj->in_flight_count--;
-        } else {
             if (obj->in_flight_count == 0) {
+                printf("%p - upgrading\n", obj);
                 if (atomic_load_explicit(&obj->request, memory_order_relaxed) == request_thread_lock_ptr) {
+                    printf("%p - there is an upgrade request\n", obj);
                     // Lock and read from the tstate
                     while(atomic_exchange_explicit(&owner_thread->tstate_lock, 1, memory_order_relaxed));
 
@@ -844,7 +853,9 @@ void try_unlock(PyObject * obj, PyThreadState * tstate){
             }
         }
     } else {
+        printf("%p - unlock multivariable getting lock\n", obj);
         while(atomic_exchange_explicit(&obj->thread_lock, 1, memory_order_relaxed));
+        printf("%p - unlock multivariable have lock\n", obj);
         if (obj->thread_queue == NULL) {
             // got here somehow, nothing to do just return
             atomic_store_explicit(&obj->thread_lock, 0, memory_order_relaxed);
@@ -873,8 +884,46 @@ void try_unlock(PyObject * obj, PyThreadState * tstate){
 }
 
 void check_thread_markers(PyThreadState * tstate) {
+    while(atomic_exchange_explicit(&tstate->tstate_lock, 1, memory_order_relaxed));
     if (tstate->num_pyobject_markers == 0){
+        atomic_store_explicit(&tstate->tstate_lock, 0, memory_order_relaxed);
         return;
+    } else {
+        size_t i;
+        for (i = 0; i < NUMBER_THREADS_CXE; i++) {
+            if (tstate->pyobject_locator[i] != NULL) {
+                PyObject * obj = tstate->pyobject_locator[i];
+                if (obj->in_flight_count == 0) {
+                    if (atomic_load_explicit(&obj->request, memory_order_relaxed) == request_thread_lock_ptr) {
+                        printf("%p - there is an upgrade request\n", obj);
+
+                        thread_marker * marker = &tstate->marker_locator[i];   
+                        // copy all the thread marker into a new marker and clear the tstate
+                        thread_marker * new_marker = (thread_marker *) malloc(sizeof(thread_marker));
+                        new_marker->wait_count = marker->wait_count;
+                        // grab the bottom lock to unlock
+                        pthread_mutex_t * lock = &marker->locks[0]->thread_lock;
+                        for (size_t i = 1; i <= marker->wait_count; i++){
+                            new_marker->locks[i-1] = marker->locks[i];
+                        }
+                        // reset the marker in the thread object so it can be reused
+                        marker->wait_count = -1;
+                        // clear the pyobject on the tstate queue
+                        tstate->pyobject_locator[i] = NULL;
+                        tstate->num_pyobject_markers--;
+                        // set the new marker on the object
+                        obj->thread_queue = new_marker;
+                        obj->current_thread = (uintptr_t) &marker->locks[0];
+                        // make this a multi thread object
+                        atomic_store_explicit(&obj->request, &multi_state, memory_order_relaxed);
+                        // unlock the waiting mutex
+                        pthread_mutex_unlock(lock);
+                        // unlock the tstate lock
+                    }
+                }
+            }
+        }
+        atomic_store_explicit(&tstate->tstate_lock, 0, memory_order_relaxed);
     }
 }
 
