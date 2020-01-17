@@ -4,7 +4,7 @@
 #ifndef Py_THREAD_STUFF_H
 #define Py_THREAD_STUFF_H
 
-# define NUMBER_THREADS_CXE 10000
+# define NUMBER_THREADS_CXE 100
 
 typedef struct _ts PyThreadState;
 

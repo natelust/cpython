@@ -735,8 +735,7 @@ lock_start:
             obj->in_flight_count++;
         } else if (obj->owner_thread == NULL){
             return;
-        } 
-        else {
+        } else {
             printf("%p - the owner thread is %p\n", obj, obj->owner_thread);
             // Lock and insert into the tstate
             while(atomic_exchange_explicit(&obj->owner_thread->tstate_lock, 1, memory_order_relaxed)){
@@ -781,15 +780,18 @@ lock_start:
             pthread_mutex_unlock(&(tstate->thread_lock));
         }
     } else {
-        printf("%p - lock multivariable getting lock\n", obj);
+        //printf("%p - lock multivariable getting lock\n", obj);
         while(atomic_exchange_explicit(&obj->thread_lock, 1, memory_order_relaxed)){
-                printf("%p - spinning in lock - %p", obj, tstate);
+                //printf("%p - spinning in lock - %p\n", obj, tstate);
             }
 
-        printf("%p - lock multivariable have lock\n", obj);
+        //printf("%p - lock multivariable have lock\n", obj);
         if (obj->thread_queue == NULL) {
             obj->thread_queue = (thread_marker *) malloc(sizeof(thread_marker));
             obj->thread_queue->wait_count = -1;
+        }
+        if (obj->current_thread == 0 ) {
+            obj->current_thread = (uintptr_t) tstate;
         }
         if ((uintptr_t) tstate == obj->current_thread) {
             obj->thread_queue->wait_count++;
@@ -799,9 +801,11 @@ lock_start:
             // the object is currently being used in another thread, add to the queue
             obj->thread_queue->wait_count++;
             obj->thread_queue->locks[obj->thread_queue->wait_count] = tstate;
+            printf("locking the mutex\n");
             pthread_mutex_lock(&tstate->thread_lock);
             atomic_store_explicit(&obj->thread_lock, 0, memory_order_relaxed);
             pthread_mutex_lock(&tstate->thread_lock);
+            printf("mutex is unlocked\n");
             pthread_mutex_unlock(&(tstate->thread_lock));
         }
     }
@@ -1591,9 +1595,18 @@ main_loop:
         case TARGET(LOAD_CONST): {
             PREDICTED(LOAD_CONST);
             PyObject *value = GETITEM(consts, oparg);
-            value->owner_thread = NULL;
-            Py_INCREF(value);
-            PUSH(value);
+            PyObject * new_value = (PyObject *) PyObject_MALLOC(Py_TYPE(value)->tp_basicsize+Py_TYPE(value)->tp_itemsize);
+            memcpy(new_value, value, Py_TYPE(value)->tp_basicsize+Py_TYPE(value)->tp_itemsize);
+            //new_value->ob_refcnt = 0;
+            //value->thread_queue = NULL;
+            //atomic_store_explicit(&value->thread_lock, 0, memory_order_relaxed);
+            //atomic_store_explicit(&value->request, multi_state_ptr, memory_order_relaxed);
+            //try_lock(value, tstate);
+            //value->owner_thread = NULL;
+            //Py_INCREF(value);
+            //PUSH(value);
+            Py_INCREF(new_value);
+            PUSH(new_value);
             FAST_DISPATCH();
         }
 
