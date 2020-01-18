@@ -817,7 +817,7 @@ void try_unlock(PyObject * obj, PyThreadState * tstate){
         return;
     }
     */
-    if (&obj->in_flight_count != 0) {
+    if (obj->in_flight_count != 0) {
         //printf("%p - unlocking %p\n", obj, tstate);
         if (tstate == obj->owner_thread){
             //printf("%p - unlocking\n", obj);
@@ -869,11 +869,11 @@ void try_unlock(PyObject * obj, PyThreadState * tstate){
         if (atomic_load_explicit(&obj->request, memory_order_relaxed) != multi_state_ptr) {
             return;
         }
-        printf("%p - unlock multivariable getting lock\n", obj);
+        //printf("%p - unlock multivariable getting lock\n", obj);
         while(atomic_exchange_explicit(&obj->thread_lock, 1, memory_order_relaxed)){
                         printf("%p - spinning in lock - %p", obj, tstate);
                     }
-        printf("%p - unlock multivariable have lock\n", obj);
+        //printf("%p - unlock multivariable have lock\n", obj);
         if (obj->thread_queue == NULL) {
             // got here somehow, nothing to do just return
             atomic_store_explicit(&obj->thread_lock, 0, memory_order_relaxed);
@@ -1591,22 +1591,40 @@ main_loop:
             PUSH(value);
             FAST_DISPATCH();
         }
-
         case TARGET(LOAD_CONST): {
             PREDICTED(LOAD_CONST);
             PyObject *value = GETITEM(consts, oparg);
-            PyObject * new_value = (PyObject *) PyObject_MALLOC(Py_TYPE(value)->tp_basicsize+Py_TYPE(value)->tp_itemsize);
-            memcpy(new_value, value, Py_TYPE(value)->tp_basicsize+Py_TYPE(value)->tp_itemsize);
+            PyObject *new_value;
+            if (!(value->ob_type->tp_flags & Py_TPFLAGS_LONG_SUBCLASS)){
+                value->thread_queue = NULL;
+                atomic_store_explicit(&value->thread_lock, 0, memory_order_relaxed);
+                atomic_store_explicit(&value->request, multi_state_ptr, memory_order_relaxed);
+                try_lock(value, tstate);
+            } else {
+                value->owner_thread = NULL;
+
+            }
+            /*
+            if (value->ob_type->tp_flags & Py_TPFLAGS_UNICODE_SUBCLASS){
+                PyObject * copy = PyUnicode_FromUnicode(PyUnicode_AsUnicodeCopy(value), PyUnicode_GET_LENGTH(value));
+                new_value = (PyObject *) copy;
+                Py_INCREF(new_value);
+            } else {
+                new_value = value;
+            }
+            */
+            //PyObject * new_value = (PyObject *) PyObject_MALLOC(Py_TYPE(value)->tp_basicsize+((PyVarObject *)value)->ob_size*Py_TYPE(value)->tp_itemsize);
+            //memcpy(new_value, value, Py_TYPE(value)->tp_basicsize+((PyVarObject *)value)->ob_size*Py_TYPE(value)->tp_itemsize);
             //new_value->ob_refcnt = 0;
             //value->thread_queue = NULL;
             //atomic_store_explicit(&value->thread_lock, 0, memory_order_relaxed);
             //atomic_store_explicit(&value->request, multi_state_ptr, memory_order_relaxed);
             //try_lock(value, tstate);
             //value->owner_thread = NULL;
-            //Py_INCREF(value);
-            //PUSH(value);
-            Py_INCREF(new_value);
-            PUSH(new_value);
+            Py_INCREF(value);
+            PUSH(value);
+            //Py_INCREF(new_value);
+            //PUSH(new_value);
             FAST_DISPATCH();
         }
 
@@ -1860,6 +1878,8 @@ main_loop:
             PyObject *sub = POP();
             PyObject *container = TOP();
             PyObject *res = PyObject_GetItem(container, sub);
+            try_unlock(sub, tstate);
+            try_unlock(container, tstate);
             Py_DECREF(container);
             Py_DECREF(sub);
             SET_TOP(res);
@@ -3332,7 +3352,9 @@ main_loop:
         }
 
         case TARGET(LOAD_ATTR): {
+            try_lock(names, tstate);
             PyObject *name = GETITEM(names, oparg);
+            try_unlock(names, tstate);
             PyObject *owner = TOP();
             PyObject *res = PyObject_GetAttr(owner, name);
             try_unlock(owner, tstate);
