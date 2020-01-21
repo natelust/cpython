@@ -1596,9 +1596,12 @@ main_loop:
             PyObject *value = GETITEM(consts, oparg);
             PyObject *new_value;
             if (PyLong_CheckExact(value)){
-                new_value = _PyLong_Copy(value);
+                Py_INCREF(value);
+                new_value = _PyLong_Copy((PyLongObject *) value);
                 new_value->owner_thread = NULL;
                 new_value->ob_refcnt = value->ob_refcnt;
+                Py_DECREF(value);
+                //printf("duplicating long\n");
             } else if( PyUnicode_Check(value)) {
                 new_value = PyUnicode_FromUnicode(PyUnicode_AsUnicodeCopy(value), PyUnicode_GET_LENGTH(value));
                 new_value->owner_thread = NULL;
@@ -1862,6 +1865,16 @@ main_loop:
             }
             else {
                 sum = PyNumber_Add(left, right);
+                PyObject * new_value;
+                if (PyLong_CheckExact(sum)){
+                    Py_INCREF(sum);
+                    new_value = _PyLong_Copy((PyLongObject *) sum);
+                    new_value->owner_thread = NULL;
+                    new_value->ob_refcnt = sum->ob_refcnt;
+                    Py_DECREF(sum);
+                    sum = new_value;
+                    //printf("duplicating long\n");
+                }
                 try_unlock(left, tstate);
                 Py_DECREF(left);
             }
@@ -3632,7 +3645,7 @@ main_loop:
             PyObject *next = (*iter->ob_type->tp_iternext)(iter);
             if (next != NULL) {
                 //printf("before for lock\n");
-                printf("%p - owned by %p on thread %p\n", next, next->owner_thread, tstate);
+                //printf("%p - owned by %p on thread %p\n", next, next->owner_thread, tstate);
                 //try_lock(next, tstate);
                 //printf(":next\n");
                 PUSH(next);
