@@ -801,11 +801,11 @@ lock_start:
             // the object is currently being used in another thread, add to the queue
             obj->thread_queue->wait_count++;
             obj->thread_queue->locks[obj->thread_queue->wait_count] = tstate;
-            printf("locking the mutex\n");
+            printf("%p - multi locking the mutex %p\n", obj, tstate);
             pthread_mutex_lock(&tstate->thread_lock);
             atomic_store_explicit(&obj->thread_lock, 0, memory_order_relaxed);
             pthread_mutex_lock(&tstate->thread_lock);
-            printf("mutex is unlocked\n");
+            printf("%p - multi mutex is unlocked %p\n", obj, tstate);
             pthread_mutex_unlock(&(tstate->thread_lock));
         }
     }
@@ -1595,15 +1595,26 @@ main_loop:
             PREDICTED(LOAD_CONST);
             PyObject *value = GETITEM(consts, oparg);
             PyObject *new_value;
-            if (!(value->ob_type->tp_flags & Py_TPFLAGS_LONG_SUBCLASS)){
+            if (PyLong_CheckExact(value)){
+                new_value = _PyLong_Copy(value);
+                new_value->owner_thread = NULL;
+                new_value->ob_refcnt = value->ob_refcnt;
+            } else if( PyUnicode_Check(value)) {
+                new_value = PyUnicode_FromUnicode(PyUnicode_AsUnicodeCopy(value), PyUnicode_GET_LENGTH(value));
+                new_value->owner_thread = NULL;
+                new_value->ob_refcnt = value->ob_refcnt;
+            } else {
+
+            //if (!(value->ob_type->tp_flags & Py_TPFLAGS_LONG_SUBCLASS)){
                 value->thread_queue = NULL;
                 atomic_store_explicit(&value->thread_lock, 0, memory_order_relaxed);
                 atomic_store_explicit(&value->request, multi_state_ptr, memory_order_relaxed);
                 try_lock(value, tstate);
-            } else {
-                value->owner_thread = NULL;
-
+                new_value = value;
             }
+            //} else {
+            //    value->owner_thread = NULL;
+            //}
             /*
             if (value->ob_type->tp_flags & Py_TPFLAGS_UNICODE_SUBCLASS){
                 PyObject * copy = PyUnicode_FromUnicode(PyUnicode_AsUnicodeCopy(value), PyUnicode_GET_LENGTH(value));
@@ -1621,10 +1632,10 @@ main_loop:
             //atomic_store_explicit(&value->request, multi_state_ptr, memory_order_relaxed);
             //try_lock(value, tstate);
             //value->owner_thread = NULL;
-            Py_INCREF(value);
-            PUSH(value);
-            //Py_INCREF(new_value);
-            //PUSH(new_value);
+            //Py_INCREF(value);
+            //PUSH(value);
+            Py_INCREF(new_value);
+            PUSH(new_value);
             FAST_DISPATCH();
         }
 
@@ -3621,7 +3632,7 @@ main_loop:
             PyObject *next = (*iter->ob_type->tp_iternext)(iter);
             if (next != NULL) {
                 //printf("before for lock\n");
-                //printf("owned by %p\n", next->owner_thread);
+                printf("%p - owned by %p on thread %p\n", next, next->owner_thread, tstate);
                 //try_lock(next, tstate);
                 //printf(":next\n");
                 PUSH(next);
