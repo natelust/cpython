@@ -726,6 +726,9 @@ lock_start:
         return;
     }
     */
+    if (obj == Py_None) {
+        return;
+    }
     if (atomic_load_explicit(&obj->request, memory_order_relaxed) != multi_state_ptr) {
         if (obj->owner_thread == NULL) {
             // I dont understand how this is, _Py_NewReference seems to not be called
@@ -817,7 +820,7 @@ void try_unlock(PyObject * obj, PyThreadState * tstate){
         return;
     }
     */
-    if (obj->in_flight_count != 0) {
+    if (obj->in_flight_count > 0) {
         //printf("%p - unlocking %p\n", obj, tstate);
         if (tstate == obj->owner_thread){
             //printf("%p - unlocking\n", obj);

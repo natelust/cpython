@@ -442,9 +442,10 @@ frame_dealloc(PyFrameObject *f)
     Py_CLEAR(f->f_trace);
 
     co = f->f_code;
-    if (co->co_zombieframe == NULL)
-        co->co_zombieframe = f;
-    else if (numfree < PyFrame_MAXFREELIST) {
+    //if (co->co_zombieframe == NULL)
+    //    co->co_zombieframe = f;
+    //else
+    if (numfree < PyFrame_MAXFREELIST) {
         ++numfree;
         f->f_back = free_list;
         free_list = f;
@@ -652,13 +653,13 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
         assert(builtins != NULL);
         Py_INCREF(builtins);
     }
-    if (code->co_zombieframe != NULL) {
-        f = code->co_zombieframe;
-        code->co_zombieframe = NULL;
-        _Py_NewReference((PyObject *)f);
-        assert(f->f_code == code);
-    }
-    else {
+    //if (code->co_zombieframe != NULL) {
+    //    f = code->co_zombieframe;
+    //    code->co_zombieframe = NULL;
+    //    _Py_NewReference((PyObject *)f);
+    //    assert(f->f_code == code);
+    //}
+    //else {
         Py_ssize_t extras, ncells, nfrees;
         ncells = PyTuple_GET_SIZE(code->co_cellvars);
         nfrees = PyTuple_GET_SIZE(code->co_freevars);
@@ -696,7 +697,7 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
             f->f_localsplus[i] = NULL;
         f->f_locals = NULL;
         f->f_trace = NULL;
-    }
+    //}
     f->f_stacktop = f->f_valuestack;
     f->f_builtins = builtins;
     Py_XINCREF(back);
