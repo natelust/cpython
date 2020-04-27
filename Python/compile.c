@@ -3116,6 +3116,17 @@ compiler_try(struct compiler *c, stmt_ty s) {
         return compiler_try_except(c, s);
 }
 
+static int
+compiler_trymatch(struct compiler *c, stmt_ty s) {
+    Py_ssize_t i, n;
+    n = asdl_seq_LEN(s->v.Trymatch.matchers);
+    for (i=0; i < n; i++){
+        matchhandler_ty matcher = (matchhandler_ty) asdl_seq_GET(
+            s->v.Trymatch.matchers, i);
+        //ADDOP(c, LOAD_METHOD, matcher.)
+    }
+}
+
 
 static int
 compiler_import_as(struct compiler *c, identifier name, identifier asname)
@@ -3368,6 +3379,8 @@ compiler_visit_stmt(struct compiler *c, stmt_ty s)
         break;
     case Try_kind:
         return compiler_try(c, s);
+    case Trymatch_kind:
+        return compiler_trymatch(c, s);
     case Assert_kind:
         return compiler_assert(c, s);
     case Import_kind:

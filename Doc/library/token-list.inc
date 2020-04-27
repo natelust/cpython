@@ -207,6 +207,8 @@
 
 .. data:: ASYNC
 
+.. data:: MATCH
+
 .. data:: TYPE_IGNORE
 
 .. data:: TYPE_COMMENT

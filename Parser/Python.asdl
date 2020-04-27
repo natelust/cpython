@@ -38,6 +38,7 @@ module Python
 
           | Raise(expr? exc, expr? cause)
           | Try(stmt* body, excepthandler* handlers, stmt* orelse, stmt* finalbody)
+          | Trymatch(expr name, matchhandler* matchers, stmt* orelse)
           | Assert(expr test, expr? msg)
 
           | Import(alias* names)
@@ -105,6 +106,9 @@ module Python
 
     excepthandler = ExceptHandler(expr? type, identifier? name, stmt* body)
                     attributes (int lineno, int col_offset, int? end_lineno, int? end_col_offset)
+
+    matchhandler = MatchHandler(identifier name, identifier* args, stmt* body)
+                   attributes (int lineno, int col_offset, int? end_lineno, int? endl_col_offset)
 
     arguments = (arg* posonlyargs, arg* args, arg? vararg, arg* kwonlyargs,
                  expr* kw_defaults, arg? kwarg, expr* defaults)

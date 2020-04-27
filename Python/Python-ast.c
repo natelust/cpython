@@ -87,6 +87,7 @@ typedef struct {
     PyObject *Lt_type;
     PyObject *MatMult_singleton;
     PyObject *MatMult_type;
+    PyObject *MatchHandler_type;
     PyObject *Mod_singleton;
     PyObject *Mod_type;
     PyObject *Module_type;
@@ -120,6 +121,7 @@ typedef struct {
     PyObject *Sub_type;
     PyObject *Subscript_type;
     PyObject *Try_type;
+    PyObject *Trymatch_type;
     PyObject *Tuple_type;
     PyObject *TypeIgnore_type;
     PyObject *UAdd_singleton;
@@ -163,6 +165,7 @@ typedef struct {
     PyObject *elts;
     PyObject *end_col_offset;
     PyObject *end_lineno;
+    PyObject *endl_col_offset;
     PyObject *exc;
     PyObject *excepthandler_type;
     PyObject *expr_context_type;
@@ -189,6 +192,8 @@ typedef struct {
     PyObject *level;
     PyObject *lineno;
     PyObject *lower;
+    PyObject *matchers;
+    PyObject *matchhandler_type;
     PyObject *mod_type;
     PyObject *module;
     PyObject *msg;
@@ -307,6 +312,7 @@ static int astmodule_clear(PyObject *module)
     Py_CLEAR(astmodulestate(module)->Lt_type);
     Py_CLEAR(astmodulestate(module)->MatMult_singleton);
     Py_CLEAR(astmodulestate(module)->MatMult_type);
+    Py_CLEAR(astmodulestate(module)->MatchHandler_type);
     Py_CLEAR(astmodulestate(module)->Mod_singleton);
     Py_CLEAR(astmodulestate(module)->Mod_type);
     Py_CLEAR(astmodulestate(module)->Module_type);
@@ -340,6 +346,7 @@ static int astmodule_clear(PyObject *module)
     Py_CLEAR(astmodulestate(module)->Sub_type);
     Py_CLEAR(astmodulestate(module)->Subscript_type);
     Py_CLEAR(astmodulestate(module)->Try_type);
+    Py_CLEAR(astmodulestate(module)->Trymatch_type);
     Py_CLEAR(astmodulestate(module)->Tuple_type);
     Py_CLEAR(astmodulestate(module)->TypeIgnore_type);
     Py_CLEAR(astmodulestate(module)->UAdd_singleton);
@@ -383,6 +390,7 @@ static int astmodule_clear(PyObject *module)
     Py_CLEAR(astmodulestate(module)->elts);
     Py_CLEAR(astmodulestate(module)->end_col_offset);
     Py_CLEAR(astmodulestate(module)->end_lineno);
+    Py_CLEAR(astmodulestate(module)->endl_col_offset);
     Py_CLEAR(astmodulestate(module)->exc);
     Py_CLEAR(astmodulestate(module)->excepthandler_type);
     Py_CLEAR(astmodulestate(module)->expr_context_type);
@@ -409,6 +417,8 @@ static int astmodule_clear(PyObject *module)
     Py_CLEAR(astmodulestate(module)->level);
     Py_CLEAR(astmodulestate(module)->lineno);
     Py_CLEAR(astmodulestate(module)->lower);
+    Py_CLEAR(astmodulestate(module)->matchers);
+    Py_CLEAR(astmodulestate(module)->matchhandler_type);
     Py_CLEAR(astmodulestate(module)->mod_type);
     Py_CLEAR(astmodulestate(module)->module);
     Py_CLEAR(astmodulestate(module)->msg);
@@ -526,6 +536,7 @@ static int astmodule_traverse(PyObject *module, visitproc visit, void* arg)
     Py_VISIT(astmodulestate(module)->Lt_type);
     Py_VISIT(astmodulestate(module)->MatMult_singleton);
     Py_VISIT(astmodulestate(module)->MatMult_type);
+    Py_VISIT(astmodulestate(module)->MatchHandler_type);
     Py_VISIT(astmodulestate(module)->Mod_singleton);
     Py_VISIT(astmodulestate(module)->Mod_type);
     Py_VISIT(astmodulestate(module)->Module_type);
@@ -559,6 +570,7 @@ static int astmodule_traverse(PyObject *module, visitproc visit, void* arg)
     Py_VISIT(astmodulestate(module)->Sub_type);
     Py_VISIT(astmodulestate(module)->Subscript_type);
     Py_VISIT(astmodulestate(module)->Try_type);
+    Py_VISIT(astmodulestate(module)->Trymatch_type);
     Py_VISIT(astmodulestate(module)->Tuple_type);
     Py_VISIT(astmodulestate(module)->TypeIgnore_type);
     Py_VISIT(astmodulestate(module)->UAdd_singleton);
@@ -602,6 +614,7 @@ static int astmodule_traverse(PyObject *module, visitproc visit, void* arg)
     Py_VISIT(astmodulestate(module)->elts);
     Py_VISIT(astmodulestate(module)->end_col_offset);
     Py_VISIT(astmodulestate(module)->end_lineno);
+    Py_VISIT(astmodulestate(module)->endl_col_offset);
     Py_VISIT(astmodulestate(module)->exc);
     Py_VISIT(astmodulestate(module)->excepthandler_type);
     Py_VISIT(astmodulestate(module)->expr_context_type);
@@ -628,6 +641,8 @@ static int astmodule_traverse(PyObject *module, visitproc visit, void* arg)
     Py_VISIT(astmodulestate(module)->level);
     Py_VISIT(astmodulestate(module)->lineno);
     Py_VISIT(astmodulestate(module)->lower);
+    Py_VISIT(astmodulestate(module)->matchers);
+    Py_VISIT(astmodulestate(module)->matchhandler_type);
     Py_VISIT(astmodulestate(module)->mod_type);
     Py_VISIT(astmodulestate(module)->module);
     Py_VISIT(astmodulestate(module)->msg);
@@ -711,6 +726,7 @@ static int init_identifiers(void)
     if ((state->elts = PyUnicode_InternFromString("elts")) == NULL) return 0;
     if ((state->end_col_offset = PyUnicode_InternFromString("end_col_offset")) == NULL) return 0;
     if ((state->end_lineno = PyUnicode_InternFromString("end_lineno")) == NULL) return 0;
+    if ((state->endl_col_offset = PyUnicode_InternFromString("endl_col_offset")) == NULL) return 0;
     if ((state->exc = PyUnicode_InternFromString("exc")) == NULL) return 0;
     if ((state->finalbody = PyUnicode_InternFromString("finalbody")) == NULL) return 0;
     if ((state->format_spec = PyUnicode_InternFromString("format_spec")) == NULL) return 0;
@@ -733,6 +749,7 @@ static int init_identifiers(void)
     if ((state->level = PyUnicode_InternFromString("level")) == NULL) return 0;
     if ((state->lineno = PyUnicode_InternFromString("lineno")) == NULL) return 0;
     if ((state->lower = PyUnicode_InternFromString("lower")) == NULL) return 0;
+    if ((state->matchers = PyUnicode_InternFromString("matchers")) == NULL) return 0;
     if ((state->module = PyUnicode_InternFromString("module")) == NULL) return 0;
     if ((state->msg = PyUnicode_InternFromString("msg")) == NULL) return 0;
     if ((state->name = PyUnicode_InternFromString("name")) == NULL) return 0;
@@ -872,6 +889,11 @@ static const char * const Try_fields[]={
     "handlers",
     "orelse",
     "finalbody",
+};
+static const char * const Trymatch_fields[]={
+    "name",
+    "matchers",
+    "orelse",
 };
 static const char * const Assert_fields[]={
     "test",
@@ -1035,6 +1057,18 @@ static PyObject* ast2obj_excepthandler(void*);
 static const char * const ExceptHandler_fields[]={
     "type",
     "name",
+    "body",
+};
+static const char * const matchhandler_attributes[] = {
+    "lineno",
+    "col_offset",
+    "end_lineno",
+    "endl_col_offset",
+};
+static PyObject* ast2obj_matchhandler(void*);
+static const char * const MatchHandler_fields[]={
+    "name",
+    "args",
     "body",
 };
 static PyObject* ast2obj_arguments(void*);
@@ -1434,6 +1468,7 @@ static int init_types(void)
         "     | AsyncWith(withitem* items, stmt* body, string? type_comment)\n"
         "     | Raise(expr? exc, expr? cause)\n"
         "     | Try(stmt* body, excepthandler* handlers, stmt* orelse, stmt* finalbody)\n"
+        "     | Trymatch(expr name, matchhandler* matchers, stmt* orelse)\n"
         "     | Assert(expr test, expr? msg)\n"
         "     | Import(alias* names)\n"
         "     | ImportFrom(identifier? module, alias* names, int? level)\n"
@@ -1539,6 +1574,10 @@ static int init_types(void)
     state->Try_type = make_type("Try", state->stmt_type, Try_fields, 4,
         "Try(stmt* body, excepthandler* handlers, stmt* orelse, stmt* finalbody)");
     if (!state->Try_type) return 0;
+    state->Trymatch_type = make_type("Trymatch", state->stmt_type,
+                                     Trymatch_fields, 3,
+        "Trymatch(expr name, matchhandler* matchers, stmt* orelse)");
+    if (!state->Trymatch_type) return 0;
     state->Assert_type = make_type("Assert", state->stmt_type, Assert_fields, 2,
         "Assert(expr test, expr? msg)");
     if (!state->Assert_type) return 0;
@@ -1966,6 +2005,23 @@ static int init_types(void)
         return 0;
     if (PyObject_SetAttr(state->ExceptHandler_type, state->name, Py_None) == -1)
         return 0;
+    state->matchhandler_type = make_type("matchhandler", state->AST_type, NULL,
+                                         0,
+        "matchhandler = MatchHandler(identifier name, identifier* args, stmt* body)");
+    if (!state->matchhandler_type) return 0;
+    if (!add_attributes(state->matchhandler_type, matchhandler_attributes, 4))
+        return 0;
+    if (PyObject_SetAttr(state->matchhandler_type, state->end_lineno, Py_None)
+        == -1)
+        return 0;
+    if (PyObject_SetAttr(state->matchhandler_type, state->endl_col_offset,
+        Py_None) == -1)
+        return 0;
+    state->MatchHandler_type = make_type("MatchHandler",
+                                         state->matchhandler_type,
+                                         MatchHandler_fields, 3,
+        "MatchHandler(identifier name, identifier* args, stmt* body)");
+    if (!state->MatchHandler_type) return 0;
     state->arguments_type = make_type("arguments", state->AST_type,
                                       arguments_fields, 7,
         "arguments(arg* posonlyargs, arg* args, arg? vararg, arg* kwonlyargs, expr* kw_defaults, arg? kwarg, expr* defaults)");
@@ -2038,6 +2094,8 @@ static int obj2ast_comprehension(PyObject* obj, comprehension_ty* out, PyArena*
                                  arena);
 static int obj2ast_excepthandler(PyObject* obj, excepthandler_ty* out, PyArena*
                                  arena);
+static int obj2ast_matchhandler(PyObject* obj, matchhandler_ty* out, PyArena*
+                                arena);
 static int obj2ast_arguments(PyObject* obj, arguments_ty* out, PyArena* arena);
 static int obj2ast_arg(PyObject* obj, arg_ty* out, PyArena* arena);
 static int obj2ast_keyword(PyObject* obj, keyword_ty* out, PyArena* arena);
@@ -2505,6 +2563,30 @@ Try(asdl_seq * body, asdl_seq * handlers, asdl_seq * orelse, asdl_seq *
     p->v.Try.handlers = handlers;
     p->v.Try.orelse = orelse;
     p->v.Try.finalbody = finalbody;
+    p->lineno = lineno;
+    p->col_offset = col_offset;
+    p->end_lineno = end_lineno;
+    p->end_col_offset = end_col_offset;
+    return p;
+}
+
+stmt_ty
+Trymatch(expr_ty name, asdl_seq * matchers, asdl_seq * orelse, int lineno, int
+         col_offset, int end_lineno, int end_col_offset, PyArena *arena)
+{
+    stmt_ty p;
+    if (!name) {
+        PyErr_SetString(PyExc_ValueError,
+                        "field name is required for Trymatch");
+        return NULL;
+    }
+    p = (stmt_ty)PyArena_Malloc(arena, sizeof(*p));
+    if (!p)
+        return NULL;
+    p->kind = Trymatch_kind;
+    p->v.Trymatch.name = name;
+    p->v.Trymatch.matchers = matchers;
+    p->v.Trymatch.orelse = orelse;
     p->lineno = lineno;
     p->col_offset = col_offset;
     p->end_lineno = end_lineno;
@@ -3390,6 +3472,30 @@ ExceptHandler(expr_ty type, identifier name, asdl_seq * body, int lineno, int
     return p;
 }
 
+matchhandler_ty
+MatchHandler(identifier name, asdl_seq * args, asdl_seq * body, int lineno, int
+             col_offset, int end_lineno, int endl_col_offset, PyArena *arena)
+{
+    matchhandler_ty p;
+    if (!name) {
+        PyErr_SetString(PyExc_ValueError,
+                        "field name is required for MatchHandler");
+        return NULL;
+    }
+    p = (matchhandler_ty)PyArena_Malloc(arena, sizeof(*p));
+    if (!p)
+        return NULL;
+    p->kind = MatchHandler_kind;
+    p->v.MatchHandler.name = name;
+    p->v.MatchHandler.args = args;
+    p->v.MatchHandler.body = body;
+    p->lineno = lineno;
+    p->col_offset = col_offset;
+    p->end_lineno = end_lineno;
+    p->endl_col_offset = endl_col_offset;
+    return p;
+}
+
 arguments_ty
 arguments(asdl_seq * posonlyargs, asdl_seq * args, arg_ty vararg, asdl_seq *
           kwonlyargs, asdl_seq * kw_defaults, arg_ty kwarg, asdl_seq *
@@ -3981,6 +4087,28 @@ ast2obj_stmt(void* _o)
         if (!value) goto failed;
         if (PyObject_SetAttr(result, astmodulestate_global->finalbody, value)
             == -1)
+            goto failed;
+        Py_DECREF(value);
+        break;
+    case Trymatch_kind:
+        tp = (PyTypeObject *)astmodulestate_global->Trymatch_type;
+        result = PyType_GenericNew(tp, NULL, NULL);
+        if (!result) goto failed;
+        value = ast2obj_expr(o->v.Trymatch.name);
+        if (!value) goto failed;
+        if (PyObject_SetAttr(result, astmodulestate_global->name, value) == -1)
+            goto failed;
+        Py_DECREF(value);
+        value = ast2obj_list(o->v.Trymatch.matchers, ast2obj_matchhandler);
+        if (!value) goto failed;
+        if (PyObject_SetAttr(result, astmodulestate_global->matchers, value) ==
+            -1)
+            goto failed;
+        Py_DECREF(value);
+        value = ast2obj_list(o->v.Trymatch.orelse, ast2obj_stmt);
+        if (!value) goto failed;
+        if (PyObject_SetAttr(result, astmodulestate_global->orelse, value) ==
+            -1)
             goto failed;
         Py_DECREF(value);
         break;
@@ -4821,6 +4949,66 @@ ast2obj_excepthandler(void* _o)
     value = ast2obj_int(o->end_col_offset);
     if (!value) goto failed;
     if (PyObject_SetAttr(result, astmodulestate_global->end_col_offset, value)
+        < 0)
+        goto failed;
+    Py_DECREF(value);
+    return result;
+failed:
+    Py_XDECREF(value);
+    Py_XDECREF(result);
+    return NULL;
+}
+
+PyObject*
+ast2obj_matchhandler(void* _o)
+{
+    matchhandler_ty o = (matchhandler_ty)_o;
+    PyObject *result = NULL, *value = NULL;
+    PyTypeObject *tp;
+    if (!o) {
+        Py_RETURN_NONE;
+    }
+
+    switch (o->kind) {
+    case MatchHandler_kind:
+        tp = (PyTypeObject *)astmodulestate_global->MatchHandler_type;
+        result = PyType_GenericNew(tp, NULL, NULL);
+        if (!result) goto failed;
+        value = ast2obj_identifier(o->v.MatchHandler.name);
+        if (!value) goto failed;
+        if (PyObject_SetAttr(result, astmodulestate_global->name, value) == -1)
+            goto failed;
+        Py_DECREF(value);
+        value = ast2obj_list(o->v.MatchHandler.args, ast2obj_identifier);
+        if (!value) goto failed;
+        if (PyObject_SetAttr(result, astmodulestate_global->args, value) == -1)
+            goto failed;
+        Py_DECREF(value);
+        value = ast2obj_list(o->v.MatchHandler.body, ast2obj_stmt);
+        if (!value) goto failed;
+        if (PyObject_SetAttr(result, astmodulestate_global->body, value) == -1)
+            goto failed;
+        Py_DECREF(value);
+        break;
+    }
+    value = ast2obj_int(o->lineno);
+    if (!value) goto failed;
+    if (PyObject_SetAttr(result, astmodulestate_global->lineno, value) < 0)
+        goto failed;
+    Py_DECREF(value);
+    value = ast2obj_int(o->col_offset);
+    if (!value) goto failed;
+    if (PyObject_SetAttr(result, astmodulestate_global->col_offset, value) < 0)
+        goto failed;
+    Py_DECREF(value);
+    value = ast2obj_int(o->end_lineno);
+    if (!value) goto failed;
+    if (PyObject_SetAttr(result, astmodulestate_global->end_lineno, value) < 0)
+        goto failed;
+    Py_DECREF(value);
+    value = ast2obj_int(o->endl_col_offset);
+    if (!value) goto failed;
+    if (PyObject_SetAttr(result, astmodulestate_global->endl_col_offset, value)
         < 0)
         goto failed;
     Py_DECREF(value);
@@ -6934,6 +7122,102 @@ obj2ast_stmt(PyObject* obj, stmt_ty* out, PyArena* arena)
         }
         *out = Try(body, handlers, orelse, finalbody, lineno, col_offset,
                    end_lineno, end_col_offset, arena);
+        if (*out == NULL) goto failed;
+        return 0;
+    }
+    tp = astmodulestate_global->Trymatch_type;
+    isinstance = PyObject_IsInstance(obj, tp);
+    if (isinstance == -1) {
+        return 1;
+    }
+    if (isinstance) {
+        expr_ty name;
+        asdl_seq* matchers;
+        asdl_seq* orelse;
+
+        if (_PyObject_LookupAttr(obj, astmodulestate_global->name, &tmp) < 0) {
+            return 1;
+        }
+        if (tmp == NULL) {
+            PyErr_SetString(PyExc_TypeError, "required field \"name\" missing from Trymatch");
+            return 1;
+        }
+        else {
+            int res;
+            res = obj2ast_expr(tmp, &name, arena);
+            if (res != 0) goto failed;
+            Py_CLEAR(tmp);
+        }
+        if (_PyObject_LookupAttr(obj, astmodulestate_global->matchers, &tmp) <
+            0) {
+            return 1;
+        }
+        if (tmp == NULL) {
+            PyErr_SetString(PyExc_TypeError, "required field \"matchers\" missing from Trymatch");
+            return 1;
+        }
+        else {
+            int res;
+            Py_ssize_t len;
+            Py_ssize_t i;
+            if (!PyList_Check(tmp)) {
+                PyErr_Format(PyExc_TypeError, "Trymatch field \"matchers\" must be a list, not a %.200s", _PyType_Name(Py_TYPE(tmp)));
+                goto failed;
+            }
+            len = PyList_GET_SIZE(tmp);
+            matchers = _Py_asdl_seq_new(len, arena);
+            if (matchers == NULL) goto failed;
+            for (i = 0; i < len; i++) {
+                matchhandler_ty val;
+                PyObject *tmp2 = PyList_GET_ITEM(tmp, i);
+                Py_INCREF(tmp2);
+                res = obj2ast_matchhandler(tmp2, &val, arena);
+                Py_DECREF(tmp2);
+                if (res != 0) goto failed;
+                if (len != PyList_GET_SIZE(tmp)) {
+                    PyErr_SetString(PyExc_RuntimeError, "Trymatch field \"matchers\" changed size during iteration");
+                    goto failed;
+                }
+                asdl_seq_SET(matchers, i, val);
+            }
+            Py_CLEAR(tmp);
+        }
+        if (_PyObject_LookupAttr(obj, astmodulestate_global->orelse, &tmp) < 0)
+            {
+            return 1;
+        }
+        if (tmp == NULL) {
+            PyErr_SetString(PyExc_TypeError, "required field \"orelse\" missing from Trymatch");
+            return 1;
+        }
+        else {
+            int res;
+            Py_ssize_t len;
+            Py_ssize_t i;
+            if (!PyList_Check(tmp)) {
+                PyErr_Format(PyExc_TypeError, "Trymatch field \"orelse\" must be a list, not a %.200s", _PyType_Name(Py_TYPE(tmp)));
+                goto failed;
+            }
+            len = PyList_GET_SIZE(tmp);
+            orelse = _Py_asdl_seq_new(len, arena);
+            if (orelse == NULL) goto failed;
+            for (i = 0; i < len; i++) {
+                stmt_ty val;
+                PyObject *tmp2 = PyList_GET_ITEM(tmp, i);
+                Py_INCREF(tmp2);
+                res = obj2ast_stmt(tmp2, &val, arena);
+                Py_DECREF(tmp2);
+                if (res != 0) goto failed;
+                if (len != PyList_GET_SIZE(tmp)) {
+                    PyErr_SetString(PyExc_RuntimeError, "Trymatch field \"orelse\" changed size during iteration");
+                    goto failed;
+                }
+                asdl_seq_SET(orelse, i, val);
+            }
+            Py_CLEAR(tmp);
+        }
+        *out = Trymatch(name, matchers, orelse, lineno, col_offset, end_lineno,
+                        end_col_offset, arena);
         if (*out == NULL) goto failed;
         return 0;
     }
@@ -9330,6 +9614,178 @@ obj2ast_excepthandler(PyObject* obj, excepthandler_ty* out, PyArena* arena)
 }
 
 int
+obj2ast_matchhandler(PyObject* obj, matchhandler_ty* out, PyArena* arena)
+{
+    int isinstance;
+
+    PyObject *tmp = NULL;
+    PyObject *tp;
+    int lineno;
+    int col_offset;
+    int end_lineno;
+    int endl_col_offset;
+
+    if (obj == Py_None) {
+        *out = NULL;
+        return 0;
+    }
+    if (_PyObject_LookupAttr(obj, astmodulestate_global->lineno, &tmp) < 0) {
+        return 1;
+    }
+    if (tmp == NULL) {
+        PyErr_SetString(PyExc_TypeError, "required field \"lineno\" missing from matchhandler");
+        return 1;
+    }
+    else {
+        int res;
+        res = obj2ast_int(tmp, &lineno, arena);
+        if (res != 0) goto failed;
+        Py_CLEAR(tmp);
+    }
+    if (_PyObject_LookupAttr(obj, astmodulestate_global->col_offset, &tmp) < 0)
+        {
+        return 1;
+    }
+    if (tmp == NULL) {
+        PyErr_SetString(PyExc_TypeError, "required field \"col_offset\" missing from matchhandler");
+        return 1;
+    }
+    else {
+        int res;
+        res = obj2ast_int(tmp, &col_offset, arena);
+        if (res != 0) goto failed;
+        Py_CLEAR(tmp);
+    }
+    if (_PyObject_LookupAttr(obj, astmodulestate_global->end_lineno, &tmp) < 0)
+        {
+        return 1;
+    }
+    if (tmp == NULL || tmp == Py_None) {
+        Py_CLEAR(tmp);
+        end_lineno = 0;
+    }
+    else {
+        int res;
+        res = obj2ast_int(tmp, &end_lineno, arena);
+        if (res != 0) goto failed;
+        Py_CLEAR(tmp);
+    }
+    if (_PyObject_LookupAttr(obj, astmodulestate_global->endl_col_offset, &tmp)
+        < 0) {
+        return 1;
+    }
+    if (tmp == NULL || tmp == Py_None) {
+        Py_CLEAR(tmp);
+        endl_col_offset = 0;
+    }
+    else {
+        int res;
+        res = obj2ast_int(tmp, &endl_col_offset, arena);
+        if (res != 0) goto failed;
+        Py_CLEAR(tmp);
+    }
+    tp = astmodulestate_global->MatchHandler_type;
+    isinstance = PyObject_IsInstance(obj, tp);
+    if (isinstance == -1) {
+        return 1;
+    }
+    if (isinstance) {
+        identifier name;
+        asdl_seq* args;
+        asdl_seq* body;
+
+        if (_PyObject_LookupAttr(obj, astmodulestate_global->name, &tmp) < 0) {
+            return 1;
+        }
+        if (tmp == NULL) {
+            PyErr_SetString(PyExc_TypeError, "required field \"name\" missing from MatchHandler");
+            return 1;
+        }
+        else {
+            int res;
+            res = obj2ast_identifier(tmp, &name, arena);
+            if (res != 0) goto failed;
+            Py_CLEAR(tmp);
+        }
+        if (_PyObject_LookupAttr(obj, astmodulestate_global->args, &tmp) < 0) {
+            return 1;
+        }
+        if (tmp == NULL) {
+            PyErr_SetString(PyExc_TypeError, "required field \"args\" missing from MatchHandler");
+            return 1;
+        }
+        else {
+            int res;
+            Py_ssize_t len;
+            Py_ssize_t i;
+            if (!PyList_Check(tmp)) {
+                PyErr_Format(PyExc_TypeError, "MatchHandler field \"args\" must be a list, not a %.200s", _PyType_Name(Py_TYPE(tmp)));
+                goto failed;
+            }
+            len = PyList_GET_SIZE(tmp);
+            args = _Py_asdl_seq_new(len, arena);
+            if (args == NULL) goto failed;
+            for (i = 0; i < len; i++) {
+                identifier val;
+                PyObject *tmp2 = PyList_GET_ITEM(tmp, i);
+                Py_INCREF(tmp2);
+                res = obj2ast_identifier(tmp2, &val, arena);
+                Py_DECREF(tmp2);
+                if (res != 0) goto failed;
+                if (len != PyList_GET_SIZE(tmp)) {
+                    PyErr_SetString(PyExc_RuntimeError, "MatchHandler field \"args\" changed size during iteration");
+                    goto failed;
+                }
+                asdl_seq_SET(args, i, val);
+            }
+            Py_CLEAR(tmp);
+        }
+        if (_PyObject_LookupAttr(obj, astmodulestate_global->body, &tmp) < 0) {
+            return 1;
+        }
+        if (tmp == NULL) {
+            PyErr_SetString(PyExc_TypeError, "required field \"body\" missing from MatchHandler");
+            return 1;
+        }
+        else {
+            int res;
+            Py_ssize_t len;
+            Py_ssize_t i;
+            if (!PyList_Check(tmp)) {
+                PyErr_Format(PyExc_TypeError, "MatchHandler field \"body\" must be a list, not a %.200s", _PyType_Name(Py_TYPE(tmp)));
+                goto failed;
+            }
+            len = PyList_GET_SIZE(tmp);
+            body = _Py_asdl_seq_new(len, arena);
+            if (body == NULL) goto failed;
+            for (i = 0; i < len; i++) {
+                stmt_ty val;
+                PyObject *tmp2 = PyList_GET_ITEM(tmp, i);
+                Py_INCREF(tmp2);
+                res = obj2ast_stmt(tmp2, &val, arena);
+                Py_DECREF(tmp2);
+                if (res != 0) goto failed;
+                if (len != PyList_GET_SIZE(tmp)) {
+                    PyErr_SetString(PyExc_RuntimeError, "MatchHandler field \"body\" changed size during iteration");
+                    goto failed;
+                }
+                asdl_seq_SET(body, i, val);
+            }
+            Py_CLEAR(tmp);
+        }
+        *out = MatchHandler(name, args, body, lineno, col_offset, end_lineno,
+                            endl_col_offset, arena);
+        if (*out == NULL) goto failed;
+        return 0;
+    }
+
+    PyErr_Format(PyExc_TypeError, "expected some sort of matchhandler, but got %R", obj);
+    failed:
+    Py_XDECREF(tmp);
+    return 1;
+}
+
+int
 obj2ast_arguments(PyObject* obj, arguments_ty* out, PyArena* arena)
 {
     PyObject* tmp = NULL;
@@ -10023,6 +10479,11 @@ PyInit__ast(void)
         goto error;
     }
     Py_INCREF(astmodulestate(m)->Try_type);
+    if (PyModule_AddObject(m, "Trymatch", astmodulestate_global->Trymatch_type)
+        < 0) {
+        goto error;
+    }
+    Py_INCREF(astmodulestate(m)->Trymatch_type);
     if (PyModule_AddObject(m, "Assert", astmodulestate_global->Assert_type) <
         0) {
         goto error;
@@ -10367,6 +10828,16 @@ PyInit__ast(void)
         goto error;
     }
     Py_INCREF(astmodulestate(m)->ExceptHandler_type);
+    if (PyModule_AddObject(m, "matchhandler",
+        astmodulestate_global->matchhandler_type) < 0) {
+        goto error;
+    }
+    Py_INCREF(astmodulestate(m)->matchhandler_type);
+    if (PyModule_AddObject(m, "MatchHandler",
+        astmodulestate_global->MatchHandler_type) < 0) {
+        goto error;
+    }
+    Py_INCREF(astmodulestate(m)->MatchHandler_type);
     if (PyModule_AddObject(m, "arguments",
         astmodulestate_global->arguments_type) < 0) {
         goto error;
