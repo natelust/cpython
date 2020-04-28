@@ -3119,12 +3119,22 @@ compiler_try(struct compiler *c, stmt_ty s) {
 static int
 compiler_trymatch(struct compiler *c, stmt_ty s) {
     Py_ssize_t i, n;
+    VISIT(c, expr, s->v.Trymatch.name);
     n = asdl_seq_LEN(s->v.Trymatch.matchers);
+    PyObject *match_method = PyUnicode_InternFromString("__match__");
     for (i=0; i < n; i++){
+        ADDOP(c, DUP_TOP);
         matchhandler_ty matcher = (matchhandler_ty) asdl_seq_GET(
             s->v.Trymatch.matchers, i);
+        compiler_nameop(c, matcher->v.MatchHandler.name, Load);
+        ADDOP_NAME(c, LOAD_METHOD, match_method, names);
+        ADDOP(c, ROT_THREE);
+        ADDOP(c, ROT_THREE);
+        ADDOP_I(c, CALL_METHOD, 2);
+        printf("in trymatch compile\n");
         //ADDOP(c, LOAD_METHOD, matcher.)
     }
+    Py_XDECREF(match_method);
 }
 
 
