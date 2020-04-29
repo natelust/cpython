@@ -3119,35 +3119,50 @@ compiler_try(struct compiler *c, stmt_ty s) {
 static int
 compiler_trymatch(struct compiler *c, stmt_ty s) {
     Py_ssize_t i, n;
-    basicblock *end, *next;
+    basicblock *end, *next, *args;
     end = compiler_new_block(c);
+    next =compiler_new_block(c);
     //next = compiler_new_block(c);
     VISIT(c, expr, s->v.Trymatch.name);
     n = asdl_seq_LEN(s->v.Trymatch.matchers);
     PyObject *match_method = PyUnicode_InternFromString("__match__");
+    PyObject *unpack_method = PyUnicode_InternFromString("__unpack__");
     for (i=0; i < n; i++){
-         next =compiler_new_block(c);
+        compiler_use_next_block(c, next);
         ADDOP(c, DUP_TOP);
         matchhandler_ty matcher = (matchhandler_ty) asdl_seq_GET(
             s->v.Trymatch.matchers, i);
         compiler_nameop(c, matcher->v.MatchHandler.name, Load);
-        if ((i+1) == n && s->v.Trymatch.orelse == NULL){
+        if (((i+1) == n) && (s->v.Trymatch.orelse == NULL)){
             next = end;
         } else {
-            next =compiler_new_block(c);
+            next = compiler_new_block(c);
         }
         ADDOP_NAME(c, LOAD_METHOD, match_method, names);
         ADDOP(c, ROT_THREE);
         ADDOP(c, ROT_THREE);
         // This calls __match__ with the argument in the try match statement
-        ADDOP_I(c, CALL_METHOD, 2);
-        ADDOP_JABS(c, JUMP_IF_FALSE_OR_POP, next);
+        ADDOP_I(c, CALL_METHOD, 1);
+        // If __match__ returns false, then jump to the next as block
+        ADDOP_JABS(c, POP_JUMP_IF_FALSE, next);
+        // if there are arguments, process them here
+        if (matcher->v.MatchHandler.args != NULL) {
+           args = compiler_new_block(c); 
+           compiler_use_next_block(c, args);
+           if (!compiler_push_fblock(c, EXCEPT, args, NULL, NULL))
+               return 0;
+        }
         VISIT_SEQ(c, stmt, matcher->v.MatchHandler.body);
         ADDOP_JABS(c, JUMP_ABSOLUTE, end);
-        // check if there is a next block, or if this should fall to the end
+    }
+    if ((s->v.Trymatch.orelse) != NULL) {
+        compiler_use_next_block(c, next);
+        VISIT_SEQ(c, stmt, s->v.Trymatch.orelse);
     }
     Py_XDECREF(match_method);
+    Py_XDECREF(unpack_method);
     compiler_use_next_block(c, end);
+    return 1;
 }
 
 

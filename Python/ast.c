@@ -4271,7 +4271,7 @@ ast_for_match_clause(struct compiling *c, const node *match, node *body)
     REQ(match, match_clause);
     REQ(body, suite);
     //arguments_ty args;
-    asdl_seq* args;
+    asdl_seq* args = NULL;
 
     /* n children 1 is not allowed
        n children 2 'as NAME'
