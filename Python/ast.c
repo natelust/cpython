@@ -4242,10 +4242,10 @@ ast_for_try_stmt(struct compiling *c, const node *n)
 asdl_seq *
 parse_match_args(struct compiling *c, const node *args){
     asdl_seq * args_seq;
-    int n_args;
-    int n_nodes = NCH(args);
+    unsigned int n_args;
+    unsigned int n_nodes = NCH(args);
     n_args = 0;
-    int arg_counter = 0;
+    unsigned int arg_counter = 0;
 
     for (unsigned int i = 0; i< n_nodes; i++){
         if (TYPE(CHILD(args, i)) == 1){
@@ -4290,7 +4290,7 @@ ast_for_match_clause(struct compiling *c, const node *match, node *body)
         return NULL;
     get_last_end_pos(suite_seq, &end_lineno, &end_col_offset);
 
-    return MatchHandler(name, args, body, LINENO(match), match->n_col_offset, end_lineno,
+    return MatchHandler(name, args, suite_seq, LINENO(match), match->n_col_offset, end_lineno,
                         end_col_offset, c->c_arena);
 }
 

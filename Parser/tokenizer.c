@@ -1448,7 +1448,7 @@ tok_get(struct tok_state *tok, const char **p_start, const char **p_end)
                 if (tok->start - tok->buf >= 4 && (tok->start - 4)[0] == 't') {
                     // This to check syntax like "if functioncall(mytry, match):"
                     int spacecounter = 0;
-                    while ((tok->buf + spacecounter)[0] == ' ' | (tok->buf + spacecounter)[0] == '\t') {
+                    while (((tok->buf + spacecounter)[0] == ' ') | ((tok->buf + spacecounter)[0] == '\t')) {
                         spacecounter++;
                     }
                     if ((tok->buf + spacecounter) == tok->start -4 && memcmp(tok->start -4, "try", 3) == 0) {
