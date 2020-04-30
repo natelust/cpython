@@ -1437,6 +1437,18 @@ PyCallable_Check(PyObject *x)
     return Py_TYPE(x)->tp_call != NULL;
 }
 
+PyObject *
+PyObject_Match(PyObject *self, PyObject *target){
+    int retval;
+    if (self == target){
+        return PyBool_FromLong(1);
+    }
+    retval = PyObject_IsInstance(target, self);
+    if (retval < 0)
+        return NULL;
+    return PyBool_FromLong(retval);
+}
+
 
 /* Helper for PyObject_Dir without arguments: returns the local scope. */
 static PyObject *

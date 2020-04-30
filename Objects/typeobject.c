@@ -3217,6 +3217,11 @@ is_dunder_name(PyObject *name)
     return 0;
 }
 
+static PyObject *
+type_match(PyObject *type, PyObject *target){
+    return PyObject_Match(type, target);
+}
+
 /* This is similar to PyObject_GenericGetAttr(),
    but uses _PyType_Lookup() instead of just looking in type->tp_dict. */
 static PyObject *
@@ -4818,6 +4823,8 @@ static PyMethodDef object_methods[] = {
     OBJECT___FORMAT___METHODDEF
     OBJECT___SIZEOF___METHODDEF
     OBJECT___DIR___METHODDEF
+    {"__match__", (PyCFunction)(void(*)(void))type_match,
+    METH_CLASS| METH_O , PyDoc_STR("__match__")},
     {0}
 };
 
