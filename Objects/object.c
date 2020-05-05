@@ -1439,11 +1439,10 @@ PyCallable_Check(PyObject *x)
 
 PyObject *
 PyObject_Match(PyObject *self, PyObject *target){
-    int retval;
     if (self == target){
         return PyBool_FromLong(1);
     }
-    retval = PyObject_IsInstance(target, self);
+    int retval = PyObject_IsInstance(target, self);
     if (retval < 0)
         return NULL;
     return PyBool_FromLong(retval);

@@ -3117,33 +3117,98 @@ compiler_try(struct compiler *c, stmt_ty s) {
 }
 
 static int
+trymatch_sequence(struct compiler *c, PyObject *method, basicblock *jump_target,
+                  PyObject *hasattr, PyObject *len_func,
+                  Py_ssize_t args_n, basicblock *args_nomatch, asdl_seq *args,
+                  basicblock *match_body, int do_load){
+    // duplicate TOS for hasattr check
+    ADDOP(c, DUP_TOP);
+    ADDOP_NAME(c, LOAD_NAME, hasattr, names);
+    ADDOP(c, ROT_TWO);
+    ADDOP_LOAD_CONST(c, method);
+    ADDOP_I(c, CALL_FUNCTION, 2);
+    // If the object does not have the attribute jump to the next block
+    ADDOP_JABS(c, POP_JUMP_IF_FALSE, jump_target);
+
+    // If this funciton is being called with a method that should be loaded
+    // i.e __unpack__, call it here, else it will be assumed that TOS is a
+    // sequence already
+    if (do_load){
+        // duplicate TOS for method call (__len__, __unpack__, etc)
+        ADDOP(c, DUP_TOP);
+        ADDOP_NAME(c, LOAD_METHOD, method, names);
+        ADDOP_I(c, CALL_METHOD, 0);
+    }
+
+    // duplicate TOS for a call to len()
+    ADDOP(c, DUP_TOP);
+    ADDOP_NAME(c, LOAD_NAME, len_func, names);
+    ADDOP(c, ROT_TWO);
+    ADDOP_I(c, CALL_FUNCTION, 1);
+    // load in the length of the args
+    ADDOP_LOAD_CONST(c, PyLong_FromSize_t(args_n));
+    // check if they are equal
+    ADDOP_I(c, COMPARE_OP, Py_EQ);
+    // if they are not equal, jump to right before the next block, so the sequence
+    // can be popped off the stack
+    ADDOP_JABS(c, POP_JUMP_IF_FALSE, args_nomatch);
+    // Sequence and args are the same lenght, unpack
+    ADDOP_I(c, UNPACK_SEQUENCE, args_n)
+
+    for (Py_ssize_t j = 0; j < args_n; j++){
+        compiler_nameop(c, asdl_seq_GET(args, j), Store);
+    }
+    // args are unpacked jump to the match body that will execute for this branch
+    ADDOP_JREL(c, JUMP_FORWARD, match_body);
+    return 1;
+}
+
+static int
 compiler_trymatch(struct compiler *c, stmt_ty s) {
-    Py_ssize_t i, n, args_n, j;
-    basicblock *end, *next, *args, *args_except, *match_body, *seq_check;
+    Py_ssize_t i, n, args_n;
+    basicblock *end, *next, *args, *args_nomatch, *match_body, *seq_check;
+    // Start some new blocks
     end = compiler_new_block(c);
     next = compiler_new_block(c);
+
+    // Get the object that is to be matched
     VISIT(c, expr, s->v.Trymatch.name);
+
+    // get the number of matcher to be evaluated
     n = asdl_seq_LEN(s->v.Trymatch.matchers);
+
+    // Setup the strings used in named lookups
     PyObject *match_method = PyUnicode_InternFromString("__match__");
     PyObject *unpack_method = PyUnicode_InternFromString("__unpack__");
-    PyObject *exception_type = PyUnicode_InternFromString("ValueError");
     PyObject *hasattr = PyUnicode_InternFromString("hasattr");
     PyObject *len_func = PyUnicode_InternFromString("len");
     PyObject *len_method = PyUnicode_InternFromString("__len__");
+
+    // Start a new block
     compiler_use_next_block(c, next);
+    // loop over the matchers
     for (i=0; i < n; i++){
+        // setup new blocks
         match_body = compiler_new_block(c);
-        args_except = compiler_new_block(c);
+        args_nomatch = compiler_new_block(c);
         seq_check = compiler_new_block(c);
+        // duplicate the object that is to be matched so that it can be used
+        // each loop
         ADDOP(c, DUP_TOP);
+        // Get the current matcher
         matchhandler_ty matcher = (matchhandler_ty) asdl_seq_GET(
             s->v.Trymatch.matchers, i);
         compiler_nameop(c, matcher->v.MatchHandler.name, Load);
+
+        // if this is the last matcher setup the block jump to either the
+        // else block if there is on, or to the end of the evaluation block
         if (((i+1) == n) && (s->v.Trymatch.orelse == NULL)){
             next = end;
         } else {
             next = compiler_new_block(c);
         }
+        // load the __match__ method, and rotate the stack such that it is in
+        // order __match__, matcher(self), match_target
         ADDOP_NAME(c, LOAD_METHOD, match_method, names);
         ADDOP(c, ROT_THREE);
         ADDOP(c, ROT_THREE);
@@ -3151,99 +3216,42 @@ compiler_trymatch(struct compiler *c, stmt_ty s) {
         ADDOP_I(c, CALL_METHOD, 1);
         // If __match__ returns false, then jump to the next as block
         ADDOP_JABS(c, POP_JUMP_IF_FALSE, next);
+
         // if there are arguments, process them here
         if (matcher->v.MatchHandler.args != NULL) {
             args = compiler_new_block(c); 
             compiler_use_next_block(c, args);
             args_n = asdl_seq_LEN(matcher->v.MatchHandler.args);
-            // duplicates what is being matched for call to __unpack__
-            ADDOP(c, DUP_TOP);
-            // hasattr(match_target, __unpack__) group
-            // duplicate again to hasattr __unpack__
-            ADDOP(c, DUP_TOP);
-            // load the method name to be used in the __unpack__ call
-            ADDOP_NAME(c, LOAD_NAME, hasattr, names);
-            ADDOP(c, ROT_TWO);
-            ADDOP_LOAD_CONST(c, unpack_method);
-            ADDOP_I(c, CALL_FUNCTION, 2);
-            ADDOP_JABS(c, POP_JUMP_IF_FALSE, seq_check);
-            // end hasattr check
-
-            ADDOP_NAME(c, LOAD_METHOD, unpack_method, names);
-
-            ADDOP_I(c, CALL_METHOD, 0);
-
-            // get the sequence len
-            ADDOP(c, DUP_TOP);
-            ADDOP_NAME(c, LOAD_NAME, len_func, names);
-            ADDOP(c, ROT_TWO);
-            ADDOP_I(c, CALL_FUNCTION, 1);
-            // load in the length of the args
-            ADDOP_LOAD_CONST(c, PyLong_FromSize_t(args_n));
-            // check if they are equal
-            ADDOP_I(c, COMPARE_OP, Py_EQ);
-            // if they are not equal, jump to right before the next block, so the sequence
-            // can be popped off the stack
-            ADDOP_JABS(c, POP_JUMP_IF_FALSE, args_except);
-
-            // Sequence and args are the same lenght, unpack
-            ADDOP_I(c, UNPACK_SEQUENCE, args_n)
-
-            for (j = 0; j < args_n; j++){
-               compiler_nameop(c, asdl_seq_GET(matcher->v.MatchHandler.args, j), Store); 
-            }
-            ADDOP_JREL(c, JUMP_FORWARD, match_body);
-
-
-            // check if this is a sequence, and if so try to unpack it
+            // Instructions if there is and __unpack__ method
+            int retval = trymatch_sequence(c, unpack_method, seq_check, hasattr, len_func,
+                                           args_n, args_nomatch, matcher->v.MatchHandler.args,
+                                           match_body, 1);
+            if (retval != 1)
+                return retval;
+            // Instructions if if this is a sequence with __len__ method
             compiler_use_next_block(c, seq_check);
-            // duplicate TOS (what is being matched) for a sequence check hasattar
-            ADDOP(c, DUP_TOP);
-            // duplicate TOS for calling len
-            ADDOP(c, DUP_TOP);
-            // one more time for unpack sequence 
-            ADDOP(c, DUP_TOP);
-            ADDOP_NAME(c, LOAD_NAME, hasattr, names);
-            ADDOP(c, ROT_TWO);
-            ADDOP_LOAD_CONST(c, len_method);
-            ADDOP_I(c, CALL_FUNCTION, 2);
-            ADDOP_JABS(c, POP_JUMP_IF_FALSE, next);
-
-            ADDOP_NAME(c, LOAD_NAME, len_func, names);
-            ADDOP(c, ROT_TWO);
-            ADDOP_I(c, CALL_FUNCTION, 1);
-            // load in the length of the args
-            ADDOP_LOAD_CONST(c, PyLong_FromSize_t(args_n));
-            // check if they are equal
-            ADDOP_I(c, COMPARE_OP, Py_EQ);
-            // if they are not equal, jump to right before the next block, so the sequence
-            // can be popped off the stack
-            ADDOP_JABS(c, POP_JUMP_IF_FALSE, args_except);
-            // Sequence and args are the same lenght, unpack
-            ADDOP_I(c, UNPACK_SEQUENCE, args_n)
-
-            for (j = 0; j < args_n; j++){
-               compiler_nameop(c, asdl_seq_GET(matcher->v.MatchHandler.args, j), Store); 
-            }
-            ADDOP_JREL(c, JUMP_FORWARD, match_body);
-
-
-            
+            retval = trymatch_sequence(c, len_method, next, hasattr, len_func,
+                                       args_n, args_nomatch, matcher->v.MatchHandler.args,
+                                       match_body, 0);
+            if (retval != 1)
+                return retval;
         }
         compiler_use_next_block(c, match_body);
         VISIT_SEQ(c, stmt, matcher->v.MatchHandler.body);
         ADDOP_JABS(c, JUMP_ABSOLUTE, end);
-        compiler_use_next_block(c, args_except);
+        compiler_use_next_block(c, args_nomatch);
+        // pop unused squence from TOS that was created in unpacking branches
         ADDOP(c, POP_TOP);
         compiler_use_next_block(c, next);
     }
+    // if there is an else block, execute it
     if ((s->v.Trymatch.orelse) != NULL) {
         compiler_use_next_block(c, next);
         VISIT_SEQ(c, stmt, s->v.Trymatch.orelse);
     }
+    // clean up the starings
     Py_XDECREF(match_method);
     Py_XDECREF(unpack_method);
-    Py_XDECREF(exception_type);
     Py_XDECREF(hasattr);
     Py_XDECREF(len_func);
     compiler_use_next_block(c, end);
