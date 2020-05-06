@@ -33,6 +33,7 @@ class TryMatchTest(unittest.TestCase):
         # to test
         try match var_to_match:
             as tuple(a, b, c):
+                # Do some work to verify the body is being parsed
                 e = 6
                 return (a, b, c)
             as tuple(a, b):
