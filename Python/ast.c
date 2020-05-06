@@ -4270,7 +4270,6 @@ ast_for_match_clause(struct compiling *c, const node *match, node *body)
     identifier name;
     REQ(match, match_clause);
     REQ(body, suite);
-    //arguments_ty args;
     asdl_seq* args = NULL;
 
     /* n children 1 is not allowed
@@ -4278,7 +4277,6 @@ ast_for_match_clause(struct compiling *c, const node *match, node *body)
        n children 3 'as NAME(args*)
     */
 
-    //name = ast_for(c, CHILD(match, 1));
     name = NEW_IDENTIFIER(CHILD(match, 1));
     if (NCH(match) == 3) {
         args = parse_match_args(c, CHILD(match, 2));

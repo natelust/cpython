@@ -199,6 +199,7 @@ static int symtable_visit_setcomp(struct symtable *st, expr_ty s);
 static int symtable_visit_dictcomp(struct symtable *st, expr_ty s);
 static int symtable_visit_arguments(struct symtable *st, arguments_ty);
 static int symtable_visit_excepthandler(struct symtable *st, excepthandler_ty);
+static int symtable_visit_matchhandler(struct symtable *st, matchhandler_ty match);
 static int symtable_visit_alias(struct symtable *st, alias_ty);
 static int symtable_visit_comprehension(struct symtable *st, comprehension_ty);
 static int symtable_visit_keyword(struct symtable *st, keyword_ty);
@@ -1305,6 +1306,20 @@ symtable_visit_stmt(struct symtable *st, stmt_ty s)
         VISIT_SEQ(st, excepthandler, s->v.Try.handlers);
         VISIT_SEQ(st, stmt, s->v.Try.finalbody);
         break;
+    case Trymatch_kind:
+        VISIT(st, expr, s->v.Trymatch.name);
+        // These names are actually used in the matching process,
+        // so they need to be loaded in the scope of the match stmt
+        PyObject *hasattr = PyUnicode_FromString("hasattr");
+        PyObject *len_func = PyUnicode_InternFromString("len");
+        Py_IncRef(hasattr);
+        Py_IncRef(len_func);
+        symtable_add_def(st, hasattr, USE);
+        symtable_add_def(st, len_func, USE);
+        VISIT_SEQ(st, matchhandler, s->v.Trymatch.matchers);
+        if (s->v.Trymatch.orelse != NULL)
+            VISIT_SEQ(st, stmt, s->v.Trymatch.orelse);
+        break;
     case Assert_kind:
         VISIT(st, expr, s->v.Assert.test);
         if (s->v.Assert.msg)
@@ -1769,6 +1784,24 @@ symtable_visit_excepthandler(struct symtable *st, excepthandler_ty eh)
         if (!symtable_add_def(st, eh->v.ExceptHandler.name, DEF_LOCAL))
             return 0;
     VISIT_SEQ(st, stmt, eh->v.ExceptHandler.body);
+    return 1;
+}
+
+static int
+symtable_visit_matchhandler(struct symtable *st, matchhandler_ty match)
+{
+    if (!symtable_add_def(st, match->v.MatchHandler.name, USE))
+        return 0;
+    if (match->v.MatchHandler.args){
+        Py_ssize_t n = asdl_seq_LEN(match->v.MatchHandler.args);
+        for (Py_ssize_t i = 0; i < n; i++){
+            identifier name = asdl_seq_GET(match->v.MatchHandler.args, i);
+            if (!symtable_add_def(st, name, DEF_LOCAL))
+                return 0;
+
+        }
+    }
+    VISIT_SEQ(st, stmt, match->v.MatchHandler.body);
     return 1;
 }
 

@@ -3123,7 +3123,7 @@ trymatch_sequence(struct compiler *c, PyObject *method, basicblock *jump_target,
                   basicblock *match_body, int do_load){
     // duplicate TOS for hasattr check
     ADDOP(c, DUP_TOP);
-    ADDOP_NAME(c, LOAD_NAME, hasattr, names);
+    compiler_nameop(c, hasattr, Load);
     ADDOP(c, ROT_TWO);
     ADDOP_LOAD_CONST(c, method);
     ADDOP_I(c, CALL_FUNCTION, 2);
@@ -3133,16 +3133,15 @@ trymatch_sequence(struct compiler *c, PyObject *method, basicblock *jump_target,
     // If this funciton is being called with a method that should be loaded
     // i.e __unpack__, call it here, else it will be assumed that TOS is a
     // sequence already
+    ADDOP(c, DUP_TOP);
     if (do_load){
-        // duplicate TOS for method call (__len__, __unpack__, etc)
-        ADDOP(c, DUP_TOP);
         ADDOP_NAME(c, LOAD_METHOD, method, names);
         ADDOP_I(c, CALL_METHOD, 0);
     }
 
     // duplicate TOS for a call to len()
     ADDOP(c, DUP_TOP);
-    ADDOP_NAME(c, LOAD_NAME, len_func, names);
+    compiler_nameop(c, len_func, Load);
     ADDOP(c, ROT_TWO);
     ADDOP_I(c, CALL_FUNCTION, 1);
     // load in the length of the args
@@ -3166,7 +3165,7 @@ trymatch_sequence(struct compiler *c, PyObject *method, basicblock *jump_target,
 static int
 compiler_trymatch(struct compiler *c, stmt_ty s) {
     Py_ssize_t i, n, args_n;
-    basicblock *end, *next, *args, *args_nomatch, *match_body, *seq_check;
+    basicblock *end, *next, *args_nomatch, *match_body, *seq_check;
     // Start some new blocks
     end = compiler_new_block(c);
     next = compiler_new_block(c);
@@ -3184,8 +3183,6 @@ compiler_trymatch(struct compiler *c, stmt_ty s) {
     PyObject *len_func = PyUnicode_InternFromString("len");
     PyObject *len_method = PyUnicode_InternFromString("__len__");
 
-    // Start a new block
-    compiler_use_next_block(c, next);
     // loop over the matchers
     for (i=0; i < n; i++){
         // setup new blocks
@@ -3198,6 +3195,7 @@ compiler_trymatch(struct compiler *c, stmt_ty s) {
         // Get the current matcher
         matchhandler_ty matcher = (matchhandler_ty) asdl_seq_GET(
             s->v.Trymatch.matchers, i);
+        SET_LOC(c, matcher);
         compiler_nameop(c, matcher->v.MatchHandler.name, Load);
 
         // if this is the last matcher setup the block jump to either the
@@ -3219,8 +3217,6 @@ compiler_trymatch(struct compiler *c, stmt_ty s) {
 
         // if there are arguments, process them here
         if (matcher->v.MatchHandler.args != NULL) {
-            args = compiler_new_block(c); 
-            compiler_use_next_block(c, args);
             args_n = asdl_seq_LEN(matcher->v.MatchHandler.args);
             // Instructions if there is and __unpack__ method
             int retval = trymatch_sequence(c, unpack_method, seq_check, hasattr, len_func,

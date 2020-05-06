@@ -135,12 +135,6 @@ try_stmt: ('try' [':' suite
                  DEDENT])
 
 
-#trymatch_stmt: ('trymatch' test ':' NEWLINE
-#                INDENT
-#                 (match_clause ':' suite)*
-#                 ['else' ':' suite]
-#                 DEDENT
-#                 )
 with_stmt: 'with' with_item (',' with_item)*  ':' [TYPE_COMMENT] suite
 with_item: test ['as' expr]
 # NB compile.c makes sure that the default except clause is last
