@@ -709,6 +709,7 @@ PyObject *
 PyObject_RichCompare(PyObject *v, PyObject *w, int op)
 {
     PyThreadState *tstate = _PyThreadState_GET();
+    //printf("op is %i\n", op);
 
     assert(Py_LT <= op && op <= Py_GE);
     if (v == NULL || w == NULL) {
